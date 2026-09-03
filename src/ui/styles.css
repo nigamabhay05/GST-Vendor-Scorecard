@@ -1,0 +1,94 @@
+@import 'tailwindcss';
+
+/* Self-hosted, from npm. No CDN, no fonts.googleapis.com, no preconnect: a request to
+   a font CDN would leak that this page was opened, and the page promises it will not.
+   Both files are subset with unicode-range, so the browser fetches only what it draws. */
+@import '@fontsource-variable/ibm-plex-sans/wght.css';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
+@import '@fontsource/ibm-plex-mono/600.css';
+
+/*
+ * Design tokens.
+ *
+ * Six structural values and four status values -- deliberately restrained, and
+ * deliberately not the generated-page default of cream and terracotta. The visual
+ * language is a working paper: hairlines, alignment, tabular figures. Cards and
+ * shadows do no work in a document like this, so there are none.
+ */
+@theme {
+  --color-ink: #16191d; /* text, headings, every figure */
+  --color-ink-muted: #5a626b; /* column labels, units, secondary text */
+  --color-sheet: #ffffff; /* the working surface */
+  --color-field: #f4f6f8; /* recessed bands: KPI strip, table head */
+  --color-rule: #d5dae0; /* hairlines -- the primary structural device */
+  --color-accent: #1b4b7a; /* ledger blue: links, focus, active rail, charts */
+
+  /* Status. Never used as the only carrier of meaning: every flag also has a text
+     label and a glyph, so the scorecard survives being printed in greyscale and read
+     by someone with deuteranopia. Contrast against --color-sheet and against each
+     tint is asserted in src/ui/tokens.test.ts. */
+  --color-flag-red: #a32014;
+  --color-flag-amber: #7a5200;
+  --color-flag-green: #1b5e43;
+  --color-flag-grey: #5a626b;
+
+  --color-flag-red-tint: #fbeceb;
+  --color-flag-amber-tint: #fbf3e3;
+  --color-flag-green-tint: #e9f4ef;
+  --color-flag-grey-tint: #f1f3f5;
+
+  --font-sans: 'IBM Plex Sans Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', monospace;
+}
+
+@layer base {
+  html {
+    background-color: var(--color-sheet);
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-sheet);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Numbers are the hero. Digits must align down a column or a reader cannot compare
+     two rows at a glance, which is the entire job of the scorecard. */
+  .num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1;
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  th,
+  td {
+    /* Even sans-serif headers sit above numeric columns, so lining figures throughout. */
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Keyboard focus must be visible, always. */
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  /* Motion happens only in response to a user action, and not at all for users who
+     have asked their system to stop moving things. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}

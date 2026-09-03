@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en-IN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <!--
+      No description, no analytics, no preconnect, no third-party anything. A
+      Content-Security-Policy that blocks all network egress is injected into this file
+      at build time (see the csp plugin in vite.config.ts); it is left out of the dev
+      server because Vite's hot reload needs a websocket to localhost.
+    -->
+    <title>Vendor GST Compliance Scorecard</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>
+      This tool processes your files in the browser, which requires JavaScript. Nothing
+      is uploaded either way.
+    </noscript>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
