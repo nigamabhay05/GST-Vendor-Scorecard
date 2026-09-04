@@ -1,5 +1,4 @@
 import { useCallback, useMemo, useState } from 'react';
-import { parseProjectFile } from '../engine/export/projectFile';
 import type {
   FileKind,
   FileMapping,
@@ -110,17 +109,6 @@ export function App() {
     return null;
   }, [result]);
 
-  const handleLoadProject = useCallback((file: File) => {
-    void file.text().then((text) => {
-      const parsed = parseProjectFile(text);
-      setLoadError(
-        parsed.ok
-          ? 'Reading a saved project back is not implemented yet. Load the original files instead.'
-          : parsed.reason,
-      );
-    });
-  }, []);
-
   const handleAddFiles = useCallback((kind: FileKind, list: FileList) => {
     void readPendingFiles(kind, list).then((added) => {
       setPendingFiles((existing) => [
@@ -173,7 +161,6 @@ export function App() {
             onUpload={() => {
               setScreen('files');
             }}
-            onLoadProject={handleLoadProject}
             busy={busy}
           />
         )}

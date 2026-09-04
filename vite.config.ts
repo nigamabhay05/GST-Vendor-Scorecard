@@ -65,5 +65,12 @@ export default defineConfig({
     assetsInlineLimit: 0,
   },
 
-  server: { open: false },
+  server: {
+    open: false,
+    /* Honour a port assigned through the environment, falling back to Vite's default.
+       Nothing here needs a fixed port -- there are no OAuth callbacks, webhooks or
+       cross-origin callers, because the app makes no network requests at all -- so a
+       busy 5173 should move the server rather than stop it. */
+    port: process.env.PORT ? Number(process.env.PORT) : undefined,
+  },
 });

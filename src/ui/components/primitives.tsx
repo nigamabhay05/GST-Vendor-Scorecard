@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import type { SupplierFlag } from '../../engine/types';
 import { formatInr, formatInrCompact, formatInrExact } from '../format';
 
@@ -73,17 +73,107 @@ export function DeadlineChip({ flag }: { flag: 'ok' | 'amber' | 'red' | 'expired
  * reachable by keyboard and by a screen reader, because the user's job is to defend that
  * number to somebody else.
  */
-export function InfoNote({ label, text }: { label: string; text: string }) {
+export interface NoteSection {
+  label: string;
+  body: string;
+}
+
+/** Panel width in pixels. Must match the `w-80` class on the panel below. */
+const NOTE_WIDTH = 320;
+const NOTE_MARGIN = 8;
+const NOTE_GAP = 6;
+
+export function InfoNote({
+  label,
+  text,
+  sections,
+}: {
+  label: string;
+  /** A single sentence. Use this or `sections`, not both. */
+  text?: string;
+  /** Labelled parts -- Meaning, Formula, Criteria -- for the headline figures. */
+  sections?: readonly NoteSection[];
+}) {
   const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const wrapperRef = useRef<HTMLSpanElement>(null);
   const id = useId();
 
+  /*
+   * The panel is positioned in viewport coordinates rather than relative to the button.
+   *
+   * Two things in this app defeat an absolutely-positioned popover. The supplier table
+   * lives inside an `overflow-x-auto` wrapper, and a container that clips one axis clips
+   * the other too -- so a note opened on a column header was being cut off entirely. And
+   * the sticky table headers carry their own z-index, which tied with the note's and won
+   * on DOM order, painting the header over the KPI explanations.
+   *
+   * Anchoring to `getBoundingClientRect` and rendering `fixed` steps outside both
+   * problems at once, and keeps working wherever a note is placed in future.
+   */
+  const place = useCallback(() => {
+    const button = buttonRef.current;
+    if (!button) return;
+
+    const rect = button.getBoundingClientRect();
+    const overflowsRight = rect.left + NOTE_WIDTH > window.innerWidth - NOTE_MARGIN;
+
+    setPosition({
+      top: rect.bottom + NOTE_GAP,
+      // Flip to sit under the button's right edge rather than run off the screen.
+      left: overflowsRight
+        ? Math.max(NOTE_MARGIN, window.innerWidth - NOTE_WIDTH - NOTE_MARGIN)
+        : rect.left,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return undefined;
+
+    place();
+
+    // `true` catches scrolling inside the table wrapper, not just the page.
+    const reposition = () => {
+      place();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+
+    /*
+     * Closed by a click outside rather than by the button losing focus. Blur would fire
+     * the moment a reader put their cursor into the panel, which would make it
+     * impossible to select a formula and paste it into a working paper -- exactly what
+     * this audience will want to do with it.
+     */
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && wrapperRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+
+    window.addEventListener('scroll', reposition, true);
+    window.addEventListener('resize', reposition);
+    window.addEventListener('keydown', onKeyDown);
+    document.addEventListener('pointerdown', onPointerDown);
+
+    return () => {
+      window.removeEventListener('scroll', reposition, true);
+      window.removeEventListener('resize', reposition);
+      window.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('pointerdown', onPointerDown);
+    };
+  }, [open, place]);
+
   return (
-    <span className="relative inline-block">
+    <span ref={wrapperRef} className="relative inline-block">
       <button
+        ref={buttonRef}
         type="button"
         aria-expanded={open}
         aria-controls={id}
-        aria-label={`How ${label} is calculated`}
+        aria-label={`What ${label} means and how it is calculated`}
         onClick={() => {
           setOpen((wasOpen) => !wasOpen);
         }}
@@ -91,13 +181,24 @@ export function InfoNote({ label, text }: { label: string; text: string }) {
       >
         i
       </button>
-      {open && (
+      {open && position && (
         <span
           id={id}
           role="note"
-          className="border-rule bg-sheet text-ink absolute top-6 left-0 z-20 block w-80 border p-3 text-[13px] leading-snug shadow-none"
+          style={{ top: position.top, left: position.left }}
+          className="border-rule bg-sheet text-ink fixed z-50 block w-80 border p-3 text-[13px] leading-snug"
         >
-          {text}
+          {sections
+            ? sections.map((section, index) => (
+                <span
+                  key={section.label}
+                  className={index > 0 ? 'border-rule mt-2 block border-t pt-2' : 'block'}
+                >
+                  <span className="text-ink-muted block text-[11px]">{section.label}</span>
+                  <span className="text-ink mt-0.5 block">{section.body}</span>
+                </span>
+              ))
+            : text}
         </span>
       )}
     </span>

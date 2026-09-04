@@ -11,6 +11,73 @@ import { AGEING, MATCHING, RECOVERY, SCORING } from '../engine/config';
 
 const { weights, flagThresholds, lookbackPeriods, minPeriodsForScore } = SCORING;
 
+/**
+ * The headline figures, explained in three fixed parts.
+ *
+ * Meaning first, because a reader who does not yet know what a number *is* cannot use a
+ * formula. Formula second, bare, so it can be checked against a working paper. Criteria
+ * last, because that is where the arguments happen — what counted, what was left out,
+ * and where the boundaries between the flags sit.
+ *
+ * The thresholds are interpolated from config.ts rather than typed out, so a weight
+ * changed there changes this sentence at the same moment it changes the arithmetic.
+ */
+export const KPI_NOTES = {
+  itcAtRisk: [
+    {
+      label: 'Meaning',
+      body: 'Credit you have paid your suppliers but cannot claim yet, because it has not reached your GSTR-2B.',
+    },
+    {
+      label: 'Formula',
+      body: 'Sum of tax on in-scope purchase invoices with no usable match in GSTR-2B',
+    },
+    {
+      label: 'Criteria',
+      body:
+        'Counted only where the credit was claimable and the supplier’s deadline has passed. ' +
+        'Blocked 17(5) credits, reverse charge, ISD, imports and credit notes are excluded, and so ' +
+        'are invoices whose filing window is still open.',
+    },
+  ],
+
+  expectedCashLoss: [
+    {
+      label: 'Meaning',
+      body: 'The part of the credit at risk that history suggests you will never actually recover.',
+    },
+    {
+      label: 'Formula',
+      body: 'ITC at risk × (1 − historical recovery rate)',
+    },
+    {
+      label: 'Criteria',
+      body:
+        `The recovery rate is this supplier’s own once ${String(RECOVERY.minGapsForSupplierRate)} or more of their past gaps have ` +
+        'resolved, and the whole dataset’s otherwise; the row shows which was used. A gap counts as ' +
+        'recovered if the invoice appeared in any later period you loaded.',
+    },
+  ],
+
+  redSuppliers: [
+    {
+      label: 'Meaning',
+      body: 'How many suppliers scored badly enough to need action from you now.',
+    },
+    {
+      label: 'Formula',
+      body: `Count of suppliers scoring below ${String(flagThresholds.amber)} out of 100`,
+    },
+    {
+      label: 'Criteria',
+      body:
+        `Score = match rate ${String(weights.matchRate)}, delay ${String(weights.avgDelayMonths)}, volatility ${String(weights.volatility)}, dispute rate ${String(weights.disputeRate)}. ` +
+        `OK ${String(flagThresholds.green)} and above, Watch ${String(flagThresholds.amber)} to ${String(flagThresholds.green - 1)}, At risk below ${String(flagThresholds.amber)}. ` +
+        `A supplier with fewer than ${String(minPeriodsForScore)} periods of data is not scored at all.`,
+    },
+  ],
+} as const;
+
 export const EXPLANATIONS = {
   itcAtRisk:
     'ITC at risk = tax on in-scope purchase invoices that have no usable counterpart in GSTR-2B. ' +
@@ -61,9 +128,7 @@ export const EXPLANATIONS = {
   scoringWindow: `Scores use the most recent ${String(lookbackPeriods)} periods loaded.`,
 
   deemedAccepted:
-    'Deemed accepted = records that reached GSTR-2B and that nobody acted on in IMS, so they were ' +
-    'accepted by default when GSTR-3B was filed. This is not a supplier problem. A high figure ' +
-    'means your team is not reviewing what arrives, and is accepting whatever suppliers report.',
+    'Records that reached your GSTR-2B and that nobody on your team acted on, so they were accepted automatically when GSTR-3B was filed.',
 
   attribution:
     'Every gap is attributed to exactly one cause. Only "supplier never reported" and "supplier ' +

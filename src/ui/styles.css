@@ -23,6 +23,7 @@
   --color-field: #f4f6f8; /* recessed bands: KPI strip, table head */
   --color-rule: #d5dae0; /* hairlines -- the primary structural device */
   --color-accent: #1b4b7a; /* ledger blue: links, focus, active rail, charts */
+  --color-accent-strong: #14385c; /* accent, darkened: hover on the primary button only */
 
   /* Status. Never used as the only carrier of meaning: every flag also has a text
      label and a glyph, so the scorecard survives being printed in greyscale and read

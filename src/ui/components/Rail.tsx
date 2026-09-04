@@ -28,9 +28,12 @@ export function Rail({
       <div className="pt-6">
         <div className="px-5 pb-5">
           <p className="text-ink text-[13px] leading-tight font-semibold">
-            Vendor GST
+            ITC Risk Radar
+          </p>
+          <p className="text-ink-muted mt-2 text-[12px] leading-snug">
+            Created &amp; Designed by
             <br />
-            Compliance Scorecard
+            Abhay Nigam
           </p>
         </div>
 

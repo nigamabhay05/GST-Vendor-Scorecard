@@ -1,5 +1,5 @@
 import type { AnalysisResult } from '../../engine/types';
-import { EXPLANATIONS } from '../explanations';
+import { EXPLANATIONS, KPI_NOTES } from '../explanations';
 import { formatCount, formatInrCompact, formatInrExact, formatPercent } from '../format';
 import { InfoNote } from './primitives';
 
@@ -19,7 +19,7 @@ export function KpiBand({ result }: { result: AnalysisResult }) {
       label: 'ITC at risk',
       value: atRisk.display,
       exact: atRisk.exact,
-      note: EXPLANATIONS.itcAtRisk,
+      sections: KPI_NOTES.itcAtRisk,
       tone: 'ink' as const,
     },
     {
@@ -27,7 +27,7 @@ export function KpiBand({ result }: { result: AnalysisResult }) {
       label: 'Expected cash loss',
       value: loss.display,
       exact: loss.exact,
-      note: `${EXPLANATIONS.expectedCashLoss} ${EXPLANATIONS.recoveryBias}`,
+      sections: KPI_NOTES.expectedCashLoss,
       tone: 'red' as const,
     },
     {
@@ -35,7 +35,7 @@ export function KpiBand({ result }: { result: AnalysisResult }) {
       label: 'Suppliers at risk',
       value: formatCount(result.kpis.redSupplierCount),
       exact: `${formatCount(result.kpis.redSupplierCount)} of ${formatCount(result.suppliers.length)} suppliers`,
-      note: EXPLANATIONS.score,
+      sections: KPI_NOTES.redSuppliers,
       tone: 'ink' as const,
     },
     {
@@ -43,6 +43,7 @@ export function KpiBand({ result }: { result: AnalysisResult }) {
       label: 'Records deemed accepted',
       value: formatPercent(result.kpis.deemedAcceptedShare, 1),
       exact: `${formatCount(result.kpis.deemedAcceptedCount)} records`,
+      sections: undefined,
       note: EXPLANATIONS.deemedAccepted,
       tone: 'ink' as const,
     },
@@ -72,7 +73,11 @@ export function KpiBand({ result }: { result: AnalysisResult }) {
             </dd>
             <dt className="text-ink-muted mt-2 flex items-center text-[11px]">
               {item.label}
-              <InfoNote label={item.label} text={item.note} />
+              {item.sections ? (
+                <InfoNote label={item.label} sections={item.sections} />
+              ) : (
+                <InfoNote label={item.label} text={item.note} />
+              )}
             </dt>
           </div>
         ))}
