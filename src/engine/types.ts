@@ -292,6 +292,15 @@ export interface MatchResult {
   booksTaxHead: TaxHead;
   portalTaxHead: TaxHead;
 
+  /**
+   * The GSTIN that actually reported the document in GSTR-2B, where one did.
+   *
+   * Kept beside the books GSTIN because the difference between them is what decides
+   * who has to fix what: a books GSTIN that fails its own check digit is our typing
+   * error, while two valid GSTINs differing by state code are two real registrations.
+   */
+  portalSupplierGstin: Gstin | null;
+
   /** Already net of the 2B value for a tier-2 partial. */
   taxAtRisk: Rupees;
   taxReceived: Rupees;
@@ -562,8 +571,25 @@ export interface SupplierScorecardEntry {
    * its own, with each remark, for a human to sort the correct ones from the mistakes.
    */
   declinedValue: Rupees;
-  /** The GSTIN on file passes its own check digit. False means our data is wrong, not theirs. */
-  booksGstinValid: boolean;
+  /**
+   * Credit held Pending in IMS.
+   *
+   * Like a rejection, this is the user own decision, not the supplier failing --
+   * but unlike a rejection it expires. Kept out of ITC at risk and expected cash loss,
+   * and shown beside the declined value so it is never invisible.
+   */
+  heldValue: Rupees;
+  /** Invoice numbers of the held documents, for the suggested action to name. */
+  heldDocuments: string[];
+  /** The earliest section 16(4) deadline among them: the date the credit lapses. */
+  heldDeadline: DateOnly | null;
+  /**
+   * Why this supplier documents could not be used as they stand, when some could not.
+   *
+   * Decides who does the work: a books GSTIN that fails its check digit is ours to fix,
+   * two valid GSTINs sharing a PAN are a question for both parties.
+   */
+  needsCorrectionKind: 'books_gstin_invalid' | 'different_registration' | 'other' | null;
   /** Their other invoices filed on time, yet these never reached any 2B or IMS. */
   wrongRecipientGstinSuspected: boolean;
   expectedCashLoss: Rupees;

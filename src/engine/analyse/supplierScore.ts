@@ -216,6 +216,62 @@ export function onTimeValueOf(result: MatchResult): number {
   return result.taxReceived + result.taxNeedsCorrection;
 }
 
+/**
+ * Why a supplier's documents could not be used as they stand.
+ *
+ * Asked of the documents that actually failed, never of the supplier's resolved
+ * identity. Those are different questions: the engine deliberately resolves a supplier
+ * whose GSTIN is mistyped onto the valid GSTIN found elsewhere under the same name, so
+ * asking "is this supplier's GSTIN valid" answers yes even when the register row that
+ * broke the match carries a GSTIN that fails its own check digit.
+ *
+ * The distinction decides who does the work, which is the whole point:
+ *
+ *   books_gstin_invalid    A GSTIN that fails its check digit is not a registration at
+ *                          all. Ours to fix, in our own master. The supplier is blameless
+ *                          and must not be contacted about it.
+ *   different_registration Two valid GSTINs, same PAN, different state. Two real
+ *                          registrations of one business -- only the two parties together
+ *                          can say which one supplied this branch.
+ */
+export type NeedsCorrectionKind =
+  | 'books_gstin_invalid'
+  | 'different_registration'
+  | 'other'
+  | null;
+
+export function classifyNeedsCorrection(
+  results: readonly MatchResult[],
+  isValidGstin: (gstin: string) => boolean,
+): NeedsCorrectionKind {
+  const failing = results.filter(
+    (result) => result.creditTreatment === 'needs_correction' && result.inScope,
+  );
+  if (failing.length === 0) return null;
+
+  // Our own data error takes precedence: it is the one the user can fix alone, today.
+  if (
+    failing.some(
+      (result) => result.supplierGstin !== null && !isValidGstin(result.supplierGstin),
+    )
+  ) {
+    return 'books_gstin_invalid';
+  }
+
+  const differentRegistration = failing.some((result) => {
+    const books = result.supplierGstin;
+    const portal = result.portalSupplierGstin;
+    if (books === null || portal === null) return false;
+    if (books === portal) return false;
+    if (!isValidGstin(books) || !isValidGstin(portal)) return false;
+
+    // Same business, different state registration: PAN agrees, state code does not.
+    return books.slice(0, 2) !== portal.slice(0, 2) && books.slice(2, 12) === portal.slice(2, 12);
+  });
+
+  return differentRegistration ? 'different_registration' : 'other';
+}
+
 // ---------------------------------------------------------------- recovery
 
 export interface RecoveryInput {
@@ -271,8 +327,11 @@ export function suggestedActionFor(entry: {
   needsCorrectionValue: number;
   attributionValue: Record<Attribution, number>;
   filingFrequency: FilingFrequency;
-  booksGstinValid: boolean;
+  needsCorrectionKind: NeedsCorrectionKind;
   wrongRecipientGstinSuspected: boolean;
+  heldValue: number;
+  heldDocuments: readonly string[];
+  heldDeadline: string | null;
 }): string {
   /*
    * The user's own outstanding decisions come first, because nothing said to the
@@ -280,6 +339,27 @@ export function suggestedActionFor(entry: {
    * drives the flag, so the row and its advice can never disagree.
    */
   if (entry.flag === 'user_action') {
+    /*
+     * Held credit gets its own sentence, naming the documents and the date.
+     *
+     * A rejection sits there indefinitely; a pending record expires. Saying "review your
+     * IMS decisions" about credit that lapses on a fixed date, without giving the date,
+     * would be the difference between acting this month and losing the credit.
+     */
+    if (entry.heldValue > 0) {
+      const named = entry.heldDocuments.slice(0, 4).join(', ');
+      const more =
+        entry.heldDocuments.length > 4
+          ? ` and ${String(entry.heldDocuments.length - 4)} more`
+          : '';
+      const by = entry.heldDeadline === null ? '' : ` Claim by ${entry.heldDeadline}, or it lapses.`;
+
+      return (
+        `${String(entry.heldDocuments.length)} document${entry.heldDocuments.length === 1 ? '' : 's'} ` +
+        `held pending in IMS (${named}${more}). Accept them to release the credit.${by}`
+      );
+    }
+
     return 'Your decision, not theirs: this credit is rejected or held in IMS. Review each one, and accept the ones that were declined in error.';
   }
 
@@ -292,10 +372,11 @@ export function suggestedActionFor(entry: {
    * GSTINs sharing a PAN are two real registrations of one business, and only the user
    * and the supplier together can say which one supplied this branch.
    */
-  if (entry.needsCorrectionValue > 0 && entry.itcAtRisk === 0) {
-    if (!entry.booksGstinValid) {
-      return 'Correct the GSTIN in your own vendor master: the one on file fails its check digit, so it is not a valid registration. The supplier reported correctly.';
-    }
+  if (entry.needsCorrectionKind === 'books_gstin_invalid') {
+    return 'The GSTIN in your register fails its check digit. Correct it in your vendor master and re-run - the supplier has done nothing wrong.';
+  }
+
+  if (entry.needsCorrectionKind === 'different_registration') {
     return 'This supplier reported under a different registration of the same PAN. Confirm with them which registration supplied you, then correct whichever side is wrong.';
   }
 
@@ -357,10 +438,12 @@ export interface SupplierScoringInput {
   globalRecovery: RecoveryInput;
   supplierRecovery: RecoveryInput;
   creditNoteIssueValue: number;
-  /** False when the GSTIN on file fails its own check digit -- our data error, not theirs. */
-  booksGstinValid: boolean;
+  /** Why the failing documents failed. See `classifyNeedsCorrection`. */
+  needsCorrectionKind: NeedsCorrectionKind;
   /** Set when matched siblings prove the supplier filed on time in the same periods. */
   wrongRecipientGstinSuspected: boolean;
+  /** Credit this supplier has sitting Pending in the user IMS, and its deadline. */
+  held: { value: number; documents: string[]; deadline: string | null };
 }
 
 const EMPTY_ATTRIBUTION_TOTALS = (): Record<Attribution, number> => ({
@@ -492,8 +575,16 @@ export function scoreSupplier(input: SupplierScoringInput): SupplierScorecardEnt
   const hasEnoughHistory = periodsWithData >= SCORING.minPeriodsForScore;
   const score = hasEnoughHistory ? weightedScore(componentPoints) : null;
   const scoreFlag = flagForScore(score, periodsWithData);
+  /*
+   * Held credit is counted from the IMS log directly, not from attribution alone. A
+   * document can match cleanly into GSTR-2B and still be sitting Pending in IMS, in
+   * which case no attribution bucket ever sees it -- and the supplier reads OK while
+   * the credit quietly ages towards its 30 November cut-off.
+   */
   const userActionValue =
-    attributionValue.recipient_rejected + attributionValue.recipient_kept_pending;
+    attributionValue.recipient_rejected +
+    attributionValue.recipient_kept_pending +
+    input.held.value;
   const flag = flagForSupplier({ scoreFlag, userActionValue });
 
   const recoveryBasis = recoveryRateFor(input.supplierRecovery, input.globalRecovery);
@@ -521,7 +612,10 @@ export function scoreSupplier(input: SupplierScoringInput): SupplierScorecardEnt
     itcAtRisk,
     needsCorrectionValue: roundRupees(needsCorrectionValue),
     declinedValue: roundRupees(declinedValue),
-    booksGstinValid: input.booksGstinValid,
+    heldValue: roundRupees(input.held.value),
+    heldDocuments: input.held.documents,
+    heldDeadline: input.held.deadline,
+    needsCorrectionKind: input.needsCorrectionKind,
     wrongRecipientGstinSuspected: input.wrongRecipientGstinSuspected,
     expectedCashLoss,
     recoveryBasis,
@@ -541,8 +635,11 @@ export function scoreSupplier(input: SupplierScoringInput): SupplierScorecardEnt
       needsCorrectionValue: roundRupees(needsCorrectionValue),
       attributionValue,
       filingFrequency: filing.frequency,
-      booksGstinValid: input.booksGstinValid,
+      needsCorrectionKind: input.needsCorrectionKind,
       wrongRecipientGstinSuspected: input.wrongRecipientGstinSuspected,
+      heldValue: roundRupees(input.held.value),
+      heldDocuments: input.held.documents,
+      heldDeadline: input.held.deadline,
     }),
     contact: contactOf(input.master),
     matchResultIds: input.results.map((result) => result.id),

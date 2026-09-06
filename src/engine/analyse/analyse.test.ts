@@ -8,14 +8,17 @@ import {
   suspectsWrongRecipientGstin,
   type AttributionContext,
 } from './attribution';
+import { isGstinFullyValid } from '../validate/gstin';
 import { bucketForAge, buildPendingAgeing, deadlineFlagFor } from './pendingAgeing';
 import {
   flagForScore,
   inferFilingFrequency,
   populationStdDev,
+  classifyNeedsCorrection,
   recoveryRateFor,
   resolveFilingFrequency,
   scoreSupplier,
+  type NeedsCorrectionKind,
 } from './supplierScore';
 
 // ---------------------------------------------------------------- builders
@@ -46,6 +49,7 @@ function match(overrides: Partial<MatchResult> & Pick<MatchResult, 'id'>): Match
     taxAtRisk: 0,
     taxReceived: 18000,
     taxNeedsCorrection: 0,
+    portalSupplierGstin: null,
     attribution: 'unattributed',
     inScope: true,
     scopeReason: null,
@@ -277,8 +281,9 @@ describe('supplier scoring', () => {
     globalRecovery: { resolved: 40, recovered: 20 },
     supplierRecovery: { resolved: 0, recovered: 0 },
     creditNoteIssueValue: 0,
-    booksGstinValid: true,
+    needsCorrectionKind: null as NeedsCorrectionKind,
     wrongRecipientGstinSuspected: false,
+    held: { value: 0, documents: [] as string[], deadline: null as string | null },
   };
 
   it('returns Insufficient history for a supplier with only two periods', () => {
@@ -373,6 +378,8 @@ describe('supplier scoring', () => {
 
     const result = scoreSupplier({
       ...baseInput,
+      // Both GSTINs valid, differing by state code: their registration, not our typo.
+      needsCorrectionKind: 'different_registration',
       scoringPeriods: periods,
       results: periods.map((period, index) => tierFour(period, index)),
     });
@@ -546,16 +553,17 @@ describe('supplier scoring', () => {
 
     const ourError = scoreSupplier({
       ...baseInput,
-      booksGstinValid: false,
+      needsCorrectionKind: 'books_gstin_invalid' as const,
       scoringPeriods: periods,
       results: tierFour,
     });
-    expect(ourError.suggestedAction).toMatch(/your own vendor master/i);
-    expect(ourError.suggestedAction).not.toMatch(/ask the supplier/i);
+    expect(ourError.suggestedAction).toMatch(/fails its check digit/i);
+    expect(ourError.suggestedAction).toMatch(/done nothing wrong/i);
+    expect(ourError.suggestedAction).not.toMatch(/different registration/i);
 
     const theirRegistration = scoreSupplier({
       ...baseInput,
-      booksGstinValid: true,
+      needsCorrectionKind: 'different_registration' as const,
       scoringPeriods: periods,
       results: tierFour,
     });
@@ -590,6 +598,130 @@ describe('supplier scoring', () => {
     expect(result.suggestedAction).toMatch(/unlikely to be non-filing/i);
     expect(result.suggestedAction).toMatch(/GSTR-1A/);
     expect(result.suggestedAction).not.toMatch(/ask for their GSTR-1 filing date/i);
+  });
+
+  /*
+   * Regression: the classification is asked of the failing documents, not of the
+   * supplier's resolved identity.
+   *
+   * The engine deliberately resolves a supplier whose GSTIN is mistyped onto the valid
+   * GSTIN found under the same name. Asking "is this supplier's GSTIN valid" therefore
+   * answers yes even when the register row that broke the match carries one that fails
+   * its check digit -- and the user was told to go and chase a blameless supplier over
+   * their own typing error.
+   */
+  describe('classifyNeedsCorrection', () => {
+    const valid = (g: string) => isGstinFullyValid(g);
+
+    const needsCorrection = (books: string, portal: string) =>
+      match({
+        id: `nc-${books}`,
+        status: 'gstin_state_mismatch',
+        tier: 4,
+        creditTreatment: 'needs_correction',
+        supplierGstin: books,
+        portalSupplierGstin: portal,
+        taxReceived: 0,
+        taxAtRisk: 0,
+        taxNeedsCorrection: 18_000,
+      });
+
+    it('calls a failed check digit our own data error', () => {
+      // Same state, same PAN -- the books value simply is not a valid registration.
+      const kind = classifyNeedsCorrection(
+        [needsCorrection('06AADCN3345Z1ZX', '06AADCN3345Z1ZL')],
+        valid,
+      );
+      expect(kind).toBe('books_gstin_invalid');
+    });
+
+    it('calls two valid GSTINs of one PAN a different registration', () => {
+      const kind = classifyNeedsCorrection(
+        [needsCorrection('36AAFCD5567L1Z6', '27AAFCD5567L1Z5')],
+        valid,
+      );
+      expect(kind).toBe('different_registration');
+    });
+
+    it('prefers our own error when a supplier has both', () => {
+      // The one the user can fix alone, today, comes first.
+      const kind = classifyNeedsCorrection(
+        [
+          needsCorrection('36AAFCD5567L1Z6', '27AAFCD5567L1Z5'),
+          needsCorrection('06AADCN3345Z1ZX', '06AADCN3345Z1ZL'),
+        ],
+        valid,
+      );
+      expect(kind).toBe('books_gstin_invalid');
+    });
+
+    it('says nothing when no document needed correcting', () => {
+      expect(classifyNeedsCorrection([match({ id: 'clean' })], valid)).toBeNull();
+    });
+  });
+
+  it('never tells the user to chase a supplier over their own check-digit error', () => {
+    const periods = ['2026-01', '2026-02', '2026-03'];
+    const result = scoreSupplier({
+      ...baseInput,
+      needsCorrectionKind: 'books_gstin_invalid',
+      scoringPeriods: periods,
+      results: periods.map((period, i) =>
+        match({
+          id: `t4-${String(i)}`,
+          status: 'gstin_state_mismatch',
+          tier: 4,
+          creditTreatment: 'needs_correction',
+          supplierGstin: '06AADCN3345Z1ZX',
+          portalSupplierGstin: '06AADCN3345Z1ZL',
+          taxReceived: 0,
+          taxAtRisk: 0,
+          taxNeedsCorrection: 18_000,
+          expectedPeriod: period,
+          actualPeriod: period,
+        }),
+      ),
+    });
+
+    expect(result.suggestedAction).toMatch(/fails its check digit/i);
+    expect(result.suggestedAction).toMatch(/done nothing wrong/i);
+    expect(result.suggestedAction).not.toMatch(/different registration/i);
+  });
+
+  /*
+   * Regression: a document can match cleanly into GSTR-2B and still be held Pending in
+   * IMS. No attribution bucket sees it, so the supplier read 100% / zero / "No action
+   * needed" while four of its documents sat on the Findings screen expiring in November.
+   */
+  it('flags a supplier whose matched credit is held pending, naming the documents', () => {
+    const periods = ['2026-01', '2026-02', '2026-03'];
+    const result = scoreSupplier({
+      ...baseInput,
+      scoringPeriods: periods,
+      // Every document matched and arrived on time: nothing in attribution to see.
+      results: periods.map((period, i) =>
+        match({ id: `ok-${String(i)}`, expectedPeriod: period, actualPeriod: period }),
+      ),
+      held: {
+        value: 71_307,
+        documents: ['SPW/001', 'SPW/002', 'SPW/003', 'SPW/004'],
+        deadline: '2026-11-30',
+      },
+    });
+
+    expect(result.components.matchRate).toBe(1);
+    expect(result.score).toBe(100);
+    expect(result.flag).toBe('user_action');
+    expect(result.heldValue).toBe(71_307);
+
+    // The action names the documents and the date the credit lapses.
+    expect(result.suggestedAction).toMatch(/4 documents/);
+    expect(result.suggestedAction).toContain('SPW/001');
+    expect(result.suggestedAction).toContain('2026-11-30');
+
+    // And it is still kept out of both money columns.
+    expect(result.itcAtRisk).toBe(0);
+    expect(result.expectedCashLoss).toBe(0);
   });
 
   it('excludes blocked credits from ITC at risk', () => {

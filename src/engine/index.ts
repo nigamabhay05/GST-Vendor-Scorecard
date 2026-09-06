@@ -15,7 +15,12 @@ import {
   totalInScopeItcOf,
 } from './analyse/exposure';
 import { buildPendingAgeing } from './analyse/pendingAgeing';
-import { inferFilingFrequency, scoreSupplier, supplierKey } from './analyse/supplierScore';
+import {
+  classifyNeedsCorrection,
+  inferFilingFrequency,
+  scoreSupplier,
+  supplierKey,
+} from './analyse/supplierScore';
 import { runMatchPipeline } from './match/pipeline';
 import { comparePeriods } from './normalize/period';
 import { parseGstr2b } from './parse/gstr2b';
@@ -195,6 +200,36 @@ export function runAnalysis(inputs: AnalysisInputs): AnalysisResult {
     return gstinByName.get(name.trim().toLowerCase()) ?? gstin;
   };
 
+  /*
+   * Pending ageing is built here, before scoring, rather than at the end.
+   *
+   * A document can match cleanly into GSTR-2B and still be sitting Pending in IMS, in
+   * which case no attribution bucket ever sees it -- the supplier reads OK while the
+   * credit quietly ages towards its 30 November cut-off. Held credit therefore has to
+   * be read from the IMS log directly, and it has to be available before the flag is
+   * decided.
+   */
+  const pendingAgeing = buildPendingAgeing({ imsRows, results: matches, asOf: inputs.asOf });
+
+  const heldBySupplier = new Map<
+    string,
+    { value: number; documents: string[]; deadline: string | null }
+  >();
+  for (const row of pendingAgeing.rows) {
+    const key = supplierKey(
+      resolveGstin(row.supplierGstin, row.supplierName),
+      row.supplierName,
+    );
+    const entry = heldBySupplier.get(key) ?? { value: 0, documents: [], deadline: null };
+    entry.value += row.taxValue;
+    entry.documents.push(row.invoiceNumber);
+    // The earliest deadline is the one that binds.
+    if (entry.deadline === null || row.section16_4Deadline < entry.deadline) {
+      entry.deadline = row.section16_4Deadline;
+    }
+    heldBySupplier.set(key, entry);
+  }
+
   // Group results by supplier before scoring, so each supplier is scored once over all
   // of their documents rather than per period.
   const bySupplier = new Map<string, typeof matches>();
@@ -236,7 +271,8 @@ export function runAnalysis(inputs: AnalysisInputs): AnalysisResult {
         ) ?? { resolved: 0, recovered: 0 },
         creditNoteIssueValue:
           creditNoteIssues.get(gstin ?? `name:${first.supplierName.toLowerCase()}`) ?? 0,
-        booksGstinValid: gstin !== null && isGstinFullyValid(gstin),
+        needsCorrectionKind: classifyNeedsCorrection(results, isGstinFullyValid),
+        held: heldBySupplier.get(key) ?? { value: 0, documents: [], deadline: null },
         wrongRecipientGstinSuspected: suspectsWrongRecipientGstin({
           results,
           hasImsEntry: (r) =>
@@ -277,7 +313,7 @@ export function runAnalysis(inputs: AnalysisInputs): AnalysisResult {
     matches,
     attributionSplit: buildAttributionSplit(matches),
     deemedAcceptance,
-    pendingAgeing: buildPendingAgeing({ imsRows, results: matches, asOf: inputs.asOf }),
+    pendingAgeing,
     creditNotes: buildCreditNoteReport(bookRows, portalRows, imsIndex),
     declinedCredit: buildDeclinedCreditReport(matches, imsIndex, (result) =>
       supplierKey(resolveGstin(result.supplierGstin, result.supplierName), result.supplierName),

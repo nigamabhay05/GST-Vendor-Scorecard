@@ -20,6 +20,7 @@ type SortKey =
   | 'matchRate'
   | 'avgDelay'
   | 'itcAtRisk'
+  | 'declinedHeld'
   | 'expectedCashLoss'
   | 'concentration';
 
@@ -67,6 +68,8 @@ export function Scorecard({
           return supplier.components.avgDelayMonths;
         case 'itcAtRisk':
           return supplier.itcAtRisk;
+        case 'declinedHeld':
+          return supplier.declinedValue + supplier.heldValue;
         case 'concentration':
           return supplier.concentration;
         default:
@@ -224,6 +227,7 @@ export function Scorecard({
                 {header('matchRate', 'Match rate', true, EXPLANATIONS.matchRate)}
                 {header('avgDelay', 'Avg delay (mo)', true, EXPLANATIONS.avgDelayMonths)}
                 {header('itcAtRisk', 'ITC at risk', true, EXPLANATIONS.itcAtRisk)}
+                {header('declinedHeld', 'Declined / held', true, EXPLANATIONS.declinedHeld)}
                 {header(
                   'expectedCashLoss',
                   'Expected cash loss',
@@ -280,6 +284,13 @@ export function Scorecard({
                   </td>
                   <td className="num px-3 py-2">
                     <Money value={supplier.itcAtRisk} />
+                  </td>
+                  <td className="num px-3 py-2">
+                    {supplier.declinedValue + supplier.heldValue > 0 ? (
+                      <Money value={supplier.declinedValue + supplier.heldValue} />
+                    ) : (
+                      <span className="text-ink-muted">—</span>
+                    )}
                   </td>
                   <td className="num px-3 py-2">
                     <Money value={supplier.expectedCashLoss} />

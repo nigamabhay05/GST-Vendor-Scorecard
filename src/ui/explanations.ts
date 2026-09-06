@@ -92,6 +92,12 @@ export const EXPLANATIONS = {
     `this supplier's own when at least ${String(RECOVERY.minGapsForSupplierRate)} of their past gaps have resolved, ` +
     'and the whole dataset’s otherwise. Which one was used is shown beside the figure.',
 
+  declinedHeld:
+    'Credit you rejected in IMS, plus credit you are holding pending. Deliberately outside ' +
+    'ITC at risk and expected cash loss: the supplier filed, so there is no filing behaviour ' +
+    'to model, and most rejections turn out to be correct. Shown here so it is never invisible ' +
+    '-- held credit in particular expires on 30 November following its financial year.',
+
   recoveryBias:
     'A gap counts as recovered if the invoice appeared in any later period you loaded. Older gaps ' +
     'have had more periods in which to resolve than recent ones, so this figure reads slightly ' +
