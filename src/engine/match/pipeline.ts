@@ -204,6 +204,7 @@ function buildMatchedResult(
 
   let taxReceived = 0;
   let taxAtRisk = 0;
+  let taxNeedsCorrection = 0;
 
   if (treatment === 'received') {
     taxReceived = portalTax;
@@ -211,11 +212,18 @@ function buildMatchedResult(
     // The 2B value is what actually reached the buyer; only the shortfall is exposed.
     taxReceived = portalTax;
     taxAtRisk = Math.max(0, roundRupees(bookTax - portalTax));
+  } else {
+    /*
+     * 'needs_correction' (tiers 4 and 5) contributes to neither headline total, by
+     * design -- but the document is real and belongs to a period, so its value is
+     * carried separately rather than lost.
+     */
+    taxNeedsCorrection = portalTax;
   }
-  // 'needs_correction' contributes to neither total, by design.
 
   if (!inScope) {
     taxAtRisk = 0;
+    taxNeedsCorrection = 0;
   }
 
   const booksTaxHead = taxHeadOf(book.tax);
@@ -246,6 +254,7 @@ function buildMatchedResult(
     portalTaxHead,
     taxAtRisk,
     taxReceived,
+    taxNeedsCorrection,
     // Attribution is decided later, by analyse/attribution.ts.
     attribution: 'unattributed',
     inScope,
@@ -289,6 +298,7 @@ function buildMissingInTwoBResult(
     portalTaxHead: 'none',
     taxAtRisk: inScope && !notYetDue ? totalTax(book.tax) : 0,
     taxReceived: 0,
+    taxNeedsCorrection: 0,
     attribution: 'unattributed',
     inScope,
     scopeReason: book.scope.reason,
@@ -330,6 +340,7 @@ function buildMissingInBooksResult(portal: Portal2bRow): MatchResult {
     portalTaxHead: taxHeadOf(portal.tax),
     taxAtRisk: 0,
     taxReceived: 0,
+    taxNeedsCorrection: 0,
     attribution: 'unattributed',
     inScope: true,
     scopeReason: null,

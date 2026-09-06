@@ -70,7 +70,7 @@ export function scorecardCsv(result: AnalysisResult): string {
       supplier.periodsWithData,
       percent(supplier.components.matchRate),
       supplier.components.avgDelayMonths.toFixed(2),
-      supplier.components.volatility.toFixed(3),
+      supplier.components.volatility === null ? '' : supplier.components.volatility.toFixed(3),
       percent(supplier.components.disputeRate),
       supplier.itcAtRisk,
       supplier.expectedCashLoss,

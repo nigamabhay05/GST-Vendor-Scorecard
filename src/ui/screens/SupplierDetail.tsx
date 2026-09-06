@@ -101,7 +101,11 @@ export function SupplierDetail({
           <span className="num">{formatMonths(supplier.components.avgDelayMonths)} mo</span>
         </Stat>
         <Stat label="Volatility" note={{ label: 'volatility', text: EXPLANATIONS.volatility }}>
-          <span className="num">{supplier.components.volatility.toFixed(2)}</span>
+          <span className="num">
+            {supplier.components.volatility === null
+              ? '—'
+              : supplier.components.volatility.toFixed(2)}
+          </span>
         </Stat>
         <Stat label="ITC at risk" note={{ label: 'ITC at risk', text: EXPLANATIONS.itcAtRisk }}>
           <Money value={supplier.itcAtRisk} />

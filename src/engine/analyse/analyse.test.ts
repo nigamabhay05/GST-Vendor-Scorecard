@@ -44,6 +44,7 @@ function match(overrides: Partial<MatchResult> & Pick<MatchResult, 'id'>): Match
     portalTaxHead: 'intra',
     taxAtRisk: 0,
     taxReceived: 18000,
+    taxNeedsCorrection: 0,
     attribution: 'unattributed',
     inScope: true,
     scopeReason: null,
@@ -223,6 +224,92 @@ describe('supplier scoring', () => {
     expect(monthly.components.avgDelayMonths).toBeGreaterThan(0);
     expect(monthly.components.matchRate).toBeLessThan(1);
     expect(monthly.score).toBeLessThan(80);
+  });
+
+  /*
+   * Regression: a supplier whose every document matched at tier 4.
+   *
+   * Tier 4 carries no value in either taxReceived or taxAtRisk, by design -- the credit
+   * is found but not usable, so counting it as either would overstate a headline figure.
+   * That left such a supplier with zero value in every period, so every monthly rate was
+   * null, periodsWithData collapsed to 0, and a supplier trading in all eight periods was
+   * reported as having no history and drew an empty chart.
+   */
+  describe('a supplier matched entirely at tier 4', () => {
+    const periods = ['2026-01', '2026-02', '2026-03', '2026-04'];
+
+    const tierFour = (period: string, index: number) =>
+      match({
+        id: `t4-${String(index)}`,
+        status: 'gstin_state_mismatch',
+        tier: 4,
+        creditTreatment: 'needs_correction',
+        // The distinguishing shape: found in 2B, but under another of the supplier's
+        // own registrations, so neither received nor at risk.
+        taxReceived: 0,
+        taxAtRisk: 0,
+        taxNeedsCorrection: 18000,
+        onTime: true,
+        expectedPeriod: period,
+        actualPeriod: period,
+      });
+
+    const result = scoreSupplier({
+      ...baseInput,
+      scoringPeriods: periods,
+      results: periods.map((period, index) => tierFour(period, index)),
+    });
+
+    it('counts every period it traded in', () => {
+      expect(result.periodsWithData).toBe(4);
+    });
+
+    it('is not flagged Insufficient history', () => {
+      expect(result.flag).not.toBe('insufficient_history');
+      expect(result.score).not.toBeNull();
+    });
+
+    it('draws a populated per-period series rather than an empty chart', () => {
+      const drawn = result.monthlyMatchRate.filter((m) => m.matchRate !== null);
+      expect(drawn).toHaveLength(4);
+      expect(drawn.every((m) => m.matchRate === 1)).toBe(true);
+      expect(drawn.every((m) => m.inScopeValue > 0)).toBe(true);
+    });
+
+    it('scores well, since the supplier did report on time', () => {
+      expect(result.score).toBeGreaterThanOrEqual(95);
+      expect(result.flag).toBe('green');
+    });
+
+    it('still keeps the value out of ITC at risk, and names it as needing correction', () => {
+      expect(result.itcAtRisk).toBe(0);
+      expect(result.needsCorrectionValue).toBe(72000);
+      expect(result.suggestedAction).toMatch(/different GSTIN/i);
+    });
+  });
+
+  it('reports volatility as unknown rather than zero when there is nothing to measure', () => {
+    // One observation has no spread. Reporting 0.00 would claim a steadiness that a
+    // single period cannot evidence.
+    const single = scoreSupplier({
+      ...baseInput,
+      scoringPeriods: ['2026-01', '2026-02', '2026-03'],
+      results: [match({ id: 'm1', expectedPeriod: '2026-01', actualPeriod: '2026-01' })],
+    });
+
+    expect(single.periodsWithData).toBe(1);
+    expect(single.components.volatility).toBeNull();
+    expect(single.componentPoints.volatility).toBeNull();
+
+    const many = scoreSupplier({
+      ...baseInput,
+      scoringPeriods: ['2026-01', '2026-02', '2026-03'],
+      results: ['2026-01', '2026-02', '2026-03'].map((period, i) =>
+        match({ id: `m${String(i)}`, expectedPeriod: period, actualPeriod: period }),
+      ),
+    });
+
+    expect(many.components.volatility).toBe(0);
   });
 
   it('excludes blocked credits from ITC at risk', () => {

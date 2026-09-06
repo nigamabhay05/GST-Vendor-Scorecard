@@ -41,9 +41,9 @@ describe('sample dataset, end to end', () => {
         "deemedAcceptedCount": 31,
         "expectedCashLoss": 1430607.28,
         "redSupplierCount": 2,
-        "suppliersInsufficientHistory": 4,
-        "suppliersScored": 21,
-        "totalInScopeItc": 10555560,
+        "suppliersInsufficientHistory": 3,
+        "suppliersScored": 22,
+        "totalInScopeItc": 11272680,
         "totalItcAtRisk": 1747800,
       }
     `);

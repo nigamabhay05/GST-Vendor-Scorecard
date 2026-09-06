@@ -117,22 +117,37 @@ export function componentPointsOf(components: ScoreComponents): ScoreComponentPo
       SCORING.delayMonthsForZeroPoints,
       false,
     ),
-    volatility: pointsFromRatio(components.volatility, SCORING.volatilityForZeroPoints, false),
+    // Unmeasurable, not zero: a component with no observations behind it scores nothing
+    // rather than scoring full marks for imagined steadiness.
+    volatility:
+      components.volatility === null
+        ? null
+        : pointsFromRatio(components.volatility, SCORING.volatilityForZeroPoints, false),
     disputeRate: pointsFromRatio(components.disputeRate, SCORING.disputeRateForZeroPoints, false),
   };
 }
 
+/**
+ * The weighted score.
+ *
+ * A component that could not be measured is dropped from both the numerator and the
+ * denominator, so the remaining components keep their relative weights instead of the
+ * supplier being silently rewarded or punished for a figure nobody could compute.
+ */
 export function weightedScore(points: ScoreComponentPoints): number {
   const { weights } = SCORING;
-  const total = weights.matchRate + weights.avgDelayMonths + weights.volatility + weights.disputeRate;
 
-  const sum =
-    points.matchRate * weights.matchRate +
-    points.avgDelayMonths * weights.avgDelayMonths +
-    points.volatility * weights.volatility +
-    points.disputeRate * weights.disputeRate;
+  let sum = 0;
+  let total = 0;
 
-  return Math.round(sum / total);
+  for (const key of Object.keys(weights) as Array<keyof ScoreComponentPoints>) {
+    const value = points[key];
+    if (value === null) continue;
+    sum += value * weights[key];
+    total += weights[key];
+  }
+
+  return total === 0 ? 0 : Math.round(sum / total);
 }
 
 export function flagForScore(score: number | null, periodsWithData: number): SupplierFlag {
@@ -149,6 +164,29 @@ export function populationStdDev(values: readonly number[]): number {
   const variance =
     values.reduce((sum, v) => sum + (v - mean) * (v - mean), 0) / values.length;
   return Math.sqrt(variance);
+}
+
+/**
+ * The value a result contributes to a supplier's measurable volume.
+ *
+ * One definition, used by the aggregate match rate, the per-period series and the
+ * period count alike, so the chart and the score can never disagree about whether a
+ * period had any business in it.
+ */
+export function valueOf(result: MatchResult): number {
+  return result.taxReceived + result.taxAtRisk + result.taxNeedsCorrection;
+}
+
+/** The part of that value the supplier actually delivered on time. */
+export function onTimeValueOf(result: MatchResult): number {
+  if (result.onTime !== true) return 0;
+  /*
+   * Credit found under another of the supplier's own registrations was still reported,
+   * and reported on time. The correction it needs is a registration problem, surfaced
+   * through needsCorrectionValue and the suggested action -- not a filing failure, and
+   * not something to score them down for.
+   */
+  return result.taxReceived + result.taxNeedsCorrection;
 }
 
 // ---------------------------------------------------------------- recovery
@@ -302,7 +340,17 @@ export function scoreSupplier(input: SupplierScoringInput): SupplierScorecardEnt
   let delayWeight = 0;
 
   for (const result of inWindow) {
-    const documentValue = result.taxReceived + result.taxAtRisk;
+    /*
+     * Every rupee the supplier is responsible for in this period, whether the credit
+     * arrived usable (taxReceived), failed to arrive (taxAtRisk), or arrived in a form
+     * that needs correcting first (taxNeedsCorrection, match tiers 4 and 5).
+     *
+     * The third term is what makes a tier-4 supplier measurable at all. Without it their
+     * documents carry zero value, every period looks empty, and a supplier who reported
+     * everything on time under another of their own registrations is reported as having
+     * no trading history.
+     */
+    const documentValue = valueOf(result);
 
     attributionCounts[result.attribution] += 1;
     attributionValue[result.attribution] = roundRupees(
@@ -311,9 +359,7 @@ export function scoreSupplier(input: SupplierScoringInput): SupplierScorecardEnt
 
     totalValue += documentValue;
     atRiskValue += result.taxAtRisk;
-    if (result.creditTreatment === 'needs_correction') {
-      needsCorrectionValue += result.taxReceived > 0 ? result.taxReceived : 0;
-    }
+    needsCorrectionValue += result.taxNeedsCorrection;
 
     /*
      * Two kinds of value are kept out of the match-rate denominator entirely.
@@ -333,7 +379,7 @@ export function scoreSupplier(input: SupplierScoringInput): SupplierScorecardEnt
 
     if (isSupplierFault(result.attribution)) supplierFaultValue += documentValue;
 
-    if (result.onTime === true) onTimeReceivedValue += result.taxReceived;
+    onTimeReceivedValue += onTimeValueOf(result);
 
     if (result.excessDelayMonths !== null && result.taxReceived > 0) {
       // Value-weighted, and measured beyond the permitted window: a large invoice two
@@ -349,9 +395,14 @@ export function scoreSupplier(input: SupplierScoringInput): SupplierScorecardEnt
   const components: ScoreComponents = {
     matchRate: inScopeValue === 0 ? 1 : onTimeReceivedValue / inScopeValue,
     avgDelayMonths: delayWeight === 0 ? 0 : delayWeightedSum / delayWeight,
-    volatility: populationStdDev(
-      observedPeriods.map((m) => m.matchRate).filter((rate): rate is number => rate !== null),
-    ),
+    // Spread needs at least two observations to exist at all. One period, or none, is
+    // reported as unknown rather than as a reassuring 0.00.
+    volatility: (() => {
+      const rates = observedPeriods
+        .map((m) => m.matchRate)
+        .filter((rate): rate is number => rate !== null);
+      return rates.length >= 2 ? populationStdDev(rates) : null;
+    })(),
     disputeRate:
       inScopeValue === 0
         ? 0
@@ -438,11 +489,8 @@ function buildMonthlyMatchRate(
         !r.notYetDue,
     );
 
-    const inScopeValue = forPeriod.reduce((sum, r) => sum + r.taxReceived + r.taxAtRisk, 0);
-    const onTimeValue = forPeriod.reduce(
-      (sum, r) => sum + (r.onTime === true ? r.taxReceived : 0),
-      0,
-    );
+    const inScopeValue = forPeriod.reduce((sum, r) => sum + valueOf(r), 0);
+    const onTimeValue = forPeriod.reduce((sum, r) => sum + onTimeValueOf(r), 0);
 
     return {
       period,

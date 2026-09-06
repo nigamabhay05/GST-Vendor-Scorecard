@@ -295,6 +295,16 @@ export interface MatchResult {
   /** Already net of the 2B value for a tier-2 partial. */
   taxAtRisk: Rupees;
   taxReceived: Rupees;
+  /**
+   * Tax found in GSTR-2B that is not usable as it stands: match tiers 4 and 5.
+   *
+   * Deliberately kept out of both `taxReceived` and `taxAtRisk`, so neither headline
+   * figure is overstated. But the document itself is real and belongs to a period, so
+   * the value is carried here rather than being dropped -- without it a supplier whose
+   * every document matched at tier 4 has zero value in every period, and the scorecard
+   * concludes it has no history at all.
+   */
+  taxNeedsCorrection: Rupees;
 
   attribution: Attribution;
   inScope: boolean;
@@ -432,14 +442,20 @@ export interface ScoreComponents {
   matchRate: number;
   /** Value-weighted mean delay in months. */
   avgDelayMonths: number;
-  /** Population standard deviation of the monthly match rate. 0..1. */
-  volatility: number;
+  /**
+   * Population standard deviation of the monthly match rate. 0..1.
+   *
+   * Null when fewer than two periods have data: with one observation there is no
+   * spread to measure, and reporting 0.00 would claim a steadiness nothing supports.
+   */
+  volatility: number | null;
   /** Share of value in gaps attributed to supplier error, plus credit note issues. 0..1. */
   disputeRate: number;
 }
 
 /** The same four measures scaled to 0..100 before weighting, for transparency. */
-export type ScoreComponentPoints = Record<keyof ScoreComponents, number>;
+/** Null where the underlying component could not be measured; see ScoreComponents. */
+export type ScoreComponentPoints = Record<keyof ScoreComponents, number | null>;
 
 export type SupplierFlag = 'green' | 'amber' | 'red' | 'insufficient_history';
 

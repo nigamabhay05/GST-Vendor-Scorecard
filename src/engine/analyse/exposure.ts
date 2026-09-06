@@ -10,7 +10,7 @@ import type {
   Portal2bRow,
   SupplierScorecardEntry,
 } from '../types';
-import type { RecoveryInput } from './supplierScore';
+import { valueOf, type RecoveryInput } from './supplierScore';
 
 /**
  * Exposure: the money figures, and the credit note handling.
@@ -191,7 +191,9 @@ export function totalInScopeItcOf(results: readonly MatchResult[]): number {
   return roundRupees(
     results
       .filter((result) => result.inScope && result.status !== 'missing_in_books')
-      .reduce((sum, result) => sum + result.taxReceived + result.taxAtRisk, 0),
+      // Same basis as each supplier's own volume, so concentration shares are
+      // computed against a denominator that includes the same documents.
+      .reduce((sum, result) => sum + valueOf(result), 0),
   );
 }
 
