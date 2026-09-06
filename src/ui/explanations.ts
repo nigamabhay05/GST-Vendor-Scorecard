@@ -37,7 +37,8 @@ export const KPI_NOTES = {
       body:
         'Counted only where the credit was claimable and the supplier’s deadline has passed. ' +
         'Blocked 17(5) credits, reverse charge, ISD, imports and credit notes are excluded, and so ' +
-        'are invoices whose filing window is still open.',
+        'are invoices whose filing window is still open. Credit you rejected in IMS is excluded ' +
+        'too and reported separately -- the supplier filed, and most rejections turn out to be correct.',
     },
   ],
 
@@ -62,18 +63,20 @@ export const KPI_NOTES = {
   redSuppliers: [
     {
       label: 'Meaning',
-      body: 'How many suppliers scored badly enough to need action from you now.',
+      body: 'Suppliers you need to do something about: those scoring poorly, plus those whose credit is waiting on a decision of yours.',
     },
     {
       label: 'Formula',
-      body: `Count of suppliers scoring below ${String(flagThresholds.amber)} out of 100`,
+      body: `Suppliers scoring below ${String(flagThresholds.amber)} out of 100, plus suppliers flagged "Your action"`,
     },
     {
       label: 'Criteria',
       body:
         `Score = match rate ${String(weights.matchRate)}, delay ${String(weights.avgDelayMonths)}, volatility ${String(weights.volatility)}, dispute rate ${String(weights.disputeRate)}. ` +
         `OK ${String(flagThresholds.green)} and above, Watch ${String(flagThresholds.amber)} to ${String(flagThresholds.green - 1)}, At risk below ${String(flagThresholds.amber)}. ` +
-        `A supplier with fewer than ${String(minPeriodsForScore)} periods of data is not scored at all.`,
+        `A supplier with fewer than ${String(minPeriodsForScore)} periods of data is not scored at all. ` +
+        'A supplier whose own record is clean but whose credit you have rejected or held in ' +
+        'IMS is flagged “Your action” rather than OK.',
     },
   ],
 } as const;

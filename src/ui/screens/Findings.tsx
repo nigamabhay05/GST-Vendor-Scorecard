@@ -150,6 +150,68 @@ export function Findings({ result }: { result: AnalysisResult }) {
         )}
       </section>
 
+      {/* ------------------------------------------------- declined credit */}
+      {result.declinedCredit.count > 0 && (
+        <section className="border-rule mt-8 border-t pt-5">
+          <SectionHeading>Credit you declined — review whether each rejection was correct</SectionHeading>
+          <p className="text-ink mt-2 max-w-3xl text-[14px] leading-relaxed">
+            You rejected {formatCount(result.declinedCredit.count)} records in IMS. These are
+            not counted in ITC at risk or expected cash loss, and deliberately carry no
+            exposure figure: most rejections are correct — goods never received, a duplicate
+            already booked — and calling those a loss would overstate what you stand to lose.
+            Whether a rejection was right depends on facts this tool cannot see, so the
+            remarks are reproduced as written for you to judge.
+          </p>
+          <p className="text-ink-muted mt-2 max-w-3xl text-[13px]">
+            Where one was declined in error, the fix is a sequence, not a wait: ask the
+            supplier to re-report through GSTR-1A or the amendment table, change the IMS
+            action to Accept, and recompute GSTR-2B.
+          </p>
+
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full max-w-4xl border-collapse text-[13px]">
+              <thead>
+                <tr className="border-rule text-ink-muted border-b text-[11px]">
+                  <th scope="col" className="px-3 py-2 text-left font-normal">
+                    Supplier
+                  </th>
+                  <th scope="col" className="px-3 py-2 text-left font-normal">
+                    Invoice
+                  </th>
+                  <th scope="col" className="px-3 py-2 text-left font-normal">
+                    Date
+                  </th>
+                  <th scope="col" className="px-3 py-2 text-right font-normal">
+                    Tax
+                  </th>
+                  <th scope="col" className="px-3 py-2 text-left font-normal">
+                    Your reason at the time
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.declinedCredit.rows.map((row) => (
+                  <tr
+                    key={`${row.supplierKey}:${row.invoiceNumber}`}
+                    className="border-rule border-b"
+                  >
+                    <td className="px-3 py-1.5">{row.supplierName}</td>
+                    <td className="num px-3 py-1.5 text-left">{row.invoiceNumber}</td>
+                    <td className="num px-3 py-1.5 text-left">{formatDate(row.invoiceDate)}</td>
+                    <td className="num px-3 py-1.5">
+                      <Money value={row.taxValue} />
+                    </td>
+                    <td className="text-ink-muted px-3 py-1.5">
+                      {row.remark ?? 'No reason recorded'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
       {/* ---------------------------------------------------- credit notes */}
       {result.creditNotes.rejected.count > 0 && (
         <section className="border-rule mt-8 border-t pt-5">

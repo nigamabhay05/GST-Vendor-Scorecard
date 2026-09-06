@@ -39,12 +39,12 @@ describe('sample dataset, end to end', () => {
     }).toMatchInlineSnapshot(`
       {
         "deemedAcceptedCount": 31,
-        "expectedCashLoss": 1430607.28,
+        "expectedCashLoss": 820000.76,
         "redSupplierCount": 2,
-        "suppliersInsufficientHistory": 3,
+        "suppliersInsufficientHistory": 2,
         "suppliersScored": 22,
         "totalInScopeItc": 11272680,
-        "totalItcAtRisk": 1747800,
+        "totalItcAtRisk": 1173240,
       }
     `);
   });
@@ -77,9 +77,13 @@ describe('seeded patterns', () => {
     expect(precision?.components.disputeRate).toBe(0);
     expect(precision?.attributionValue.recipient_rejected).toBeGreaterThan(0);
     expect(precision?.attributionValue.supplier_never_reported).toBe(0);
-    expect(precision?.suggestedAction).toMatch(/your own IMS decisions/i);
-    // The money is still reported: the buyer has genuinely lost this credit.
-    expect(precision?.itcAtRisk).toBeGreaterThan(0);
+    expect(precision?.suggestedAction).toMatch(/your decision, not theirs/i);
+    // Not counted as exposure any more -- the supplier filed, and a rejection is the
+    // buyer's own call. It is reported in its own bucket for review instead.
+    expect(precision?.itcAtRisk).toBe(0);
+    expect(precision?.expectedCashLoss).toBe(0);
+    expect(precision?.declinedValue).toBeGreaterThan(0);
+    expect(precision?.flag).toBe('user_action');
   });
 
   it('3. a quarterly QRMP filer scores green despite apparent delay', () => {

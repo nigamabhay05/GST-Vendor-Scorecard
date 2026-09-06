@@ -457,7 +457,50 @@ export interface ScoreComponents {
 /** Null where the underlying component could not be measured; see ScoreComponents. */
 export type ScoreComponentPoints = Record<keyof ScoreComponents, number | null>;
 
-export type SupplierFlag = 'green' | 'amber' | 'red' | 'insufficient_history';
+/**
+ * What the reader should do about this supplier.
+ *
+ * `user_action` is deliberately not a severity between amber and red. It answers a
+ * different question: the supplier's own behaviour may be spotless, but credit is
+ * sitting on a decision only the user can make. A flag is the one thing most readers
+ * scan, and showing OK beside a six-figure gap -- however defensible the score -- is
+ * misleading. This state exists so that never happens.
+ */
+export type SupplierFlag =
+  | 'green'
+  | 'amber'
+  | 'red'
+  | 'user_action'
+  | 'insufficient_history';
+
+/** One document the user rejected in IMS, with the reason they gave at the time. */
+export interface DeclinedCreditRow {
+  supplierKey: string;
+  supplierName: string;
+  supplierGstin: Gstin | null;
+  invoiceNumber: string;
+  invoiceDate: DateOnly | null;
+  period: PeriodKey | null;
+  taxValue: Rupees;
+  /** The IMS remark, verbatim. The whole point is that a human reads this. */
+  remark: string | null;
+  actionDate: DateOnly | null;
+}
+
+/**
+ * Credit the user declined, gathered for review.
+ *
+ * No headline rupee figure is attached to this anywhere in the interface. Whether a
+ * rejection was correct is a question about goods received and duplicates booked, which
+ * this tool cannot see -- so it lists the documents and the reasons and leaves the
+ * judgement to someone who can.
+ */
+export interface DeclinedCreditReport {
+  rows: DeclinedCreditRow[];
+  count: number;
+  /** Total of the listed documents. Shown as a review workload, never as exposure. */
+  taxValue: Rupees;
+}
 
 /**
  * Which recovery rate was used for `expectedCashLoss`, and how much history stands
@@ -509,6 +552,20 @@ export interface SupplierScorecardEntry {
    * than disappearing from the supplier entirely.
    */
   needsCorrectionValue: Rupees;
+  /**
+   * Credit the user rejected in IMS.
+   *
+   * Excluded from both ITC at risk and expected cash loss. The supplier filed on time,
+   * so there is no filing behaviour for a recovery rate to model; and most rejections
+   * are correct -- goods never received, duplicate already booked -- so the credit was
+   * never claimable and reporting it as a loss overstates exposure. It is reported on
+   * its own, with each remark, for a human to sort the correct ones from the mistakes.
+   */
+  declinedValue: Rupees;
+  /** The GSTIN on file passes its own check digit. False means our data is wrong, not theirs. */
+  booksGstinValid: boolean;
+  /** Their other invoices filed on time, yet these never reached any 2B or IMS. */
+  wrongRecipientGstinSuspected: boolean;
   expectedCashLoss: Rupees;
   recoveryBasis: RecoveryRateBasis;
   /** This supplier's in-scope ITC as a share of all in-scope ITC. 0..1. */
@@ -594,6 +651,10 @@ export interface HeadlineKpis {
   totalItcAtRisk: Rupees;
   expectedCashLoss: Rupees;
   redSupplierCount: number;
+  /** Suppliers whose gap is awaiting the user own decision, not the supplier's. */
+  userActionSupplierCount: number;
+  /** redSupplierCount + userActionSupplierCount. What the KPI strip shows. */
+  suppliersNeedingAttention: number;
   /** Share of 2B records that were deemed accepted rather than actively accepted. 0..1. */
   deemedAcceptedShare: number;
   deemedAcceptedCount: number;
@@ -646,6 +707,8 @@ export interface AnalysisResult {
   deemedAcceptance: DeemedAcceptanceReport;
   pendingAgeing: PendingAgeingReport;
   creditNotes: CreditNoteReport;
+  /** Credit the user rejected in IMS, listed for review. Never counted as exposure. */
+  declinedCredit: DeclinedCreditReport;
   outOfScope: ScopeExclusionSummary[];
   followUpEmails: FollowUpEmail[];
   /** What the parsers made of each file header, so the mapping screen can show and

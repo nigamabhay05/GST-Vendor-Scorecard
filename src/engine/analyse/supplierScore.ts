@@ -13,6 +13,7 @@ import type {
   ScoreComponentPoints,
   ScoreComponents,
   SupplierContact,
+  Rupees,
   SupplierFlag,
   SupplierMasterRow,
   SupplierScorecardEntry,
@@ -157,6 +158,32 @@ export function flagForScore(score: number | null, periodsWithData: number): Sup
   return 'red';
 }
 
+/**
+ * The flag actually shown, once the user's own outstanding decisions are taken into
+ * account.
+ *
+ * The score answers "is this supplier at fault". The flag answers "does this row need
+ * me". Those come apart precisely when a blameless supplier has material credit sitting
+ * behind a decision the user has not made -- rejected in IMS, or held pending. The score
+ * stays at 100 because the supplier earned it; the flag says "Your action" because the
+ * money is going nowhere until somebody looks at it.
+ *
+ * A green flag beside a six-figure gap is the single most misleading thing this
+ * scorecard could print, because the flag is the only column most readers scan.
+ */
+export function flagForSupplier(input: {
+  scoreFlag: SupplierFlag;
+  userActionValue: Rupees;
+}): SupplierFlag {
+  if (input.userActionValue < ACTION_THRESHOLDS.materialUserActionRupees) return input.scoreFlag;
+
+  // A genuinely bad supplier keeps their red flag: the supplier problem is the larger
+  // one, and the user's pending decisions are still listed on the drill-down.
+  if (input.scoreFlag === 'red') return 'red';
+
+  return 'user_action';
+}
+
 /** Population standard deviation. Zero for a single observation, by definition. */
 export function populationStdDev(values: readonly number[]): number {
   if (values.length === 0) return 0;
@@ -244,19 +271,47 @@ export function suggestedActionFor(entry: {
   needsCorrectionValue: number;
   attributionValue: Record<Attribution, number>;
   filingFrequency: FilingFrequency;
+  booksGstinValid: boolean;
+  wrongRecipientGstinSuspected: boolean;
 }): string {
-  const recipientValue =
-    entry.attributionValue.recipient_rejected + entry.attributionValue.recipient_kept_pending;
-
-  // The buyer's own doing outweighs anything to say to the supplier.
-  if (recipientValue > entry.itcAtRisk * 0.5 && recipientValue > 0) {
-    return 'Review your own IMS decisions first: most of this gap is credit your team rejected or is still holding.';
+  /*
+   * The user's own outstanding decisions come first, because nothing said to the
+   * supplier is actionable until they are resolved. This is the same condition that
+   * drives the flag, so the row and its advice can never disagree.
+   */
+  if (entry.flag === 'user_action') {
+    return 'Your decision, not theirs: this credit is rejected or held in IMS. Review each one, and accept the ones that were declined in error.';
   }
 
-  // A supplier whose whole volume needs correction has no measurable match rate, so
-  // the score says nothing. The correction is the action, not the score.
+  /*
+   * A mismatch between the GSTIN on file and the one that reported.
+   *
+   * Which side is wrong decides who does the work, and getting it backwards sends the
+   * user to chase a supplier over the user's own typing error. A GSTIN that fails its
+   * own check digit cannot be a real registration, so it is ours to fix; two valid
+   * GSTINs sharing a PAN are two real registrations of one business, and only the user
+   * and the supplier together can say which one supplied this branch.
+   */
   if (entry.needsCorrectionValue > 0 && entry.itcAtRisk === 0) {
-    return 'Reported under a different GSTIN or invoice number. Ask the supplier to amend, then re-run.';
+    if (!entry.booksGstinValid) {
+      return 'Correct the GSTIN in your own vendor master: the one on file fails its check digit, so it is not a valid registration. The supplier reported correctly.';
+    }
+    return 'This supplier reported under a different registration of the same PAN. Confirm with them which registration supplied you, then correct whichever side is wrong.';
+  }
+
+  /*
+   * The supplier filed on time in these very periods -- other invoices of theirs came
+   * through cleanly -- yet some documents are absent from every 2B and absent from the
+   * IMS log. Non-filing does not explain that. The likeliest remaining explanation is
+   * that they reported those invoices against the wrong recipient GSTIN, in which case
+   * the credit is sitting in a stranger's 2B.
+   *
+   * Offered as a hypothesis, and only ever as one: the other party's 2B is not visible
+   * from here, and telling a supplier they have made a mistake we cannot see would be
+   * worse than saying nothing.
+   */
+  if (entry.wrongRecipientGstinSuspected) {
+    return 'Their other invoices filed on time in the same periods, so this is unlikely to be non-filing. Ask them to check the recipient GSTIN on these documents against your own, and to re-report through GSTR-1A if it is wrong.';
   }
 
   if (entry.flag === 'insufficient_history') {
@@ -302,6 +357,10 @@ export interface SupplierScoringInput {
   globalRecovery: RecoveryInput;
   supplierRecovery: RecoveryInput;
   creditNoteIssueValue: number;
+  /** False when the GSTIN on file fails its own check digit -- our data error, not theirs. */
+  booksGstinValid: boolean;
+  /** Set when matched siblings prove the supplier filed on time in the same periods. */
+  wrongRecipientGstinSuspected: boolean;
 }
 
 const EMPTY_ATTRIBUTION_TOTALS = (): Record<Attribution, number> => ({
@@ -335,6 +394,7 @@ export function scoreSupplier(input: SupplierScoringInput): SupplierScorecardEnt
   let onTimeReceivedValue = 0;
   let atRiskValue = 0;
   let needsCorrectionValue = 0;
+  let declinedValue = 0;
   let supplierFaultValue = 0;
   let delayWeightedSum = 0;
   let delayWeight = 0;
@@ -358,8 +418,25 @@ export function scoreSupplier(input: SupplierScoringInput): SupplierScorecardEnt
     );
 
     totalValue += documentValue;
-    atRiskValue += result.taxAtRisk;
     needsCorrectionValue += result.taxNeedsCorrection;
+
+    /*
+     * Credit the user rejected is not at risk, and never enters expected cash loss.
+     *
+     * A recovery rate models whether a supplier eventually files. Here the supplier
+     * already filed, on time -- recovering the credit is a sequence of user actions
+     * (supplier re-reports through GSTR-1A, user switches the IMS action to Accept,
+     * 2B is recomputed), not a probability this tool can estimate. And most rejections
+     * turn out to be correct: goods never received, duplicate already booked. Calling
+     * that a loss overstates exposure with a number nothing supports.
+     *
+     * It gets its own bucket instead, listed document by document with the remark.
+     */
+    if (result.attribution === 'recipient_rejected') {
+      declinedValue += result.taxAtRisk;
+    } else {
+      atRiskValue += result.taxAtRisk;
+    }
 
     /*
      * Two kinds of value are kept out of the match-rate denominator entirely.
@@ -414,7 +491,10 @@ export function scoreSupplier(input: SupplierScoringInput): SupplierScorecardEnt
 
   const hasEnoughHistory = periodsWithData >= SCORING.minPeriodsForScore;
   const score = hasEnoughHistory ? weightedScore(componentPoints) : null;
-  const flag = flagForScore(score, periodsWithData);
+  const scoreFlag = flagForScore(score, periodsWithData);
+  const userActionValue =
+    attributionValue.recipient_rejected + attributionValue.recipient_kept_pending;
+  const flag = flagForSupplier({ scoreFlag, userActionValue });
 
   const recoveryBasis = recoveryRateFor(input.supplierRecovery, input.globalRecovery);
   const itcAtRisk = roundRupees(atRiskValue);
@@ -440,6 +520,9 @@ export function scoreSupplier(input: SupplierScoringInput): SupplierScorecardEnt
     componentPoints,
     itcAtRisk,
     needsCorrectionValue: roundRupees(needsCorrectionValue),
+    declinedValue: roundRupees(declinedValue),
+    booksGstinValid: input.booksGstinValid,
+    wrongRecipientGstinSuspected: input.wrongRecipientGstinSuspected,
     expectedCashLoss,
     recoveryBasis,
     concentration,
@@ -458,6 +541,8 @@ export function scoreSupplier(input: SupplierScoringInput): SupplierScorecardEnt
       needsCorrectionValue: roundRupees(needsCorrectionValue),
       attributionValue,
       filingFrequency: filing.frequency,
+      booksGstinValid: input.booksGstinValid,
+      wrongRecipientGstinSuspected: input.wrongRecipientGstinSuspected,
     }),
     contact: contactOf(input.master),
     matchResultIds: input.results.map((result) => result.id),

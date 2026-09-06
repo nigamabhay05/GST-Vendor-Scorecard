@@ -63,10 +63,35 @@ export function buildFollowUpEmail(
     '',
     `We have reviewed our purchase records against GSTR-2B for ${rangeText}.`,
     '',
-    `Input tax credit of ${formatInr(supplier.itcAtRisk)} against invoices we hold from you ` +
-      'has not yet appeared in our GSTR-2B. Since our GSTR-3B is locked to GSTR-2B, we are ' +
-      'unable to claim this credit until the invoices are reported in your GSTR-1.',
   ];
+
+  /*
+   * Two different letters, because two different things went wrong.
+   *
+   * Asking a supplier to file returns you a filing acknowledgement and no credit, when
+   * the problem was that they filed against somebody else's GSTIN. Their other invoices
+   * arriving on time in the same periods is what tells us which letter to send.
+   */
+  if (supplier.wrongRecipientGstinSuspected) {
+    lines.push(
+      `Input tax credit of ${formatInr(supplier.itcAtRisk)} against invoices we hold from you ` +
+        'has not appeared in our GSTR-2B for any period.',
+      '',
+      'Your other invoices for the same periods have reached us on time, so we do not think ' +
+        'this is a filing delay. The likeliest explanation is that these particular invoices ' +
+        'were reported against a different recipient GSTIN.',
+      '',
+      'Could you please check the recipient GSTIN recorded against these documents in your ' +
+        'billing system, against the GSTIN on our purchase orders. If it is incorrect, the ' +
+        'correction can be made through GSTR-1A so the credit reaches us in the next cycle.',
+    );
+  } else {
+    lines.push(
+      `Input tax credit of ${formatInr(supplier.itcAtRisk)} against invoices we hold from you ` +
+        'has not yet appeared in our GSTR-2B. Since our GSTR-3B is locked to GSTR-2B, we are ' +
+        'unable to claim this credit until the invoices are reported in your GSTR-1.',
+    );
+  }
 
   if (supplier.components.avgDelayMonths >= 1) {
     lines.push(
@@ -79,9 +104,17 @@ export function buildFollowUpEmail(
 
   lines.push(
     '',
-    'Could you confirm:',
-    '  1. Whether these invoices were included in your GSTR-1, and for which period.',
-    '  2. If they were missed, the period in which you will report them.',
+    ...(supplier.wrongRecipientGstinSuspected
+      ? [
+          'Could you confirm:',
+          '  1. The recipient GSTIN recorded against these invoices in your system.',
+          '  2. If it is wrong, when the GSTR-1A correction will be filed.',
+        ]
+      : [
+          'Could you confirm:',
+          '  1. Whether these invoices were included in your GSTR-1, and for which period.',
+          '  2. If they were missed, the period in which you will report them.',
+        ]),
     '',
     'A copy of the invoice list is attached to this message.',
     '',

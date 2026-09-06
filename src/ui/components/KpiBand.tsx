@@ -32,9 +32,12 @@ export function KpiBand({ result }: { result: AnalysisResult }) {
     },
     {
       key: 'red',
-      label: 'Suppliers at risk',
-      value: formatCount(result.kpis.redSupplierCount),
-      exact: `${formatCount(result.kpis.redSupplierCount)} of ${formatCount(result.suppliers.length)} suppliers`,
+      label: 'Suppliers needing attention',
+      value: formatCount(result.kpis.suppliersNeedingAttention),
+      exact:
+        `${formatCount(result.kpis.redSupplierCount)} at risk, ` +
+        `${formatCount(result.kpis.userActionSupplierCount)} awaiting your action, ` +
+        `of ${formatCount(result.suppliers.length)} suppliers`,
       sections: KPI_NOTES.redSuppliers,
       tone: 'ink' as const,
     },

@@ -95,7 +95,8 @@ export function Start({
   return (
     <div className="mx-auto max-w-3xl px-8 py-10">
       <h1 className="text-ink text-[30px] leading-tight font-semibold tracking-tight">
-        Reduce the chances of ITC Blockage with ITC Risk Radar
+        Reduce the chances of ITC Blockage with ITC Risk Radar &mdash; Keep your Working
+        Capital safe
       </h1>
 
       <p className="text-ink mt-4 max-w-2xl text-[15px] leading-relaxed">
@@ -131,7 +132,7 @@ export function Start({
           type="button"
           onClick={onLoadSample}
           disabled={busy}
-          className="bg-accent hover:bg-accent-strong focus-visible:outline-accent block w-full px-6 py-5 text-left text-white transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-50"
+          className="bg-accent hover:bg-accent-strong focus-visible:outline-accent inline-block px-6 py-4 text-left text-white transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-50"
         >
           <span className="block text-[18px] leading-tight font-semibold">
             {busy ? 'Loading dummy data' : 'Try ITC Risk Radar with dummy data'}

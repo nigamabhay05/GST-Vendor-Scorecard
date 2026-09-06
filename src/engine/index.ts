@@ -3,6 +3,7 @@ import {
   attributeAll,
   buildAttributionSplit,
   buildDeemedAcceptanceReport,
+  suspectsWrongRecipientGstin,
   type AttributionContext,
 } from './analyse/attribution';
 import {
@@ -10,6 +11,7 @@ import {
   computeRecovery,
   creditNoteIssueValueBySupplier,
   buildHeadlineKpis,
+  buildDeclinedCreditReport,
   totalInScopeItcOf,
 } from './analyse/exposure';
 import { buildPendingAgeing } from './analyse/pendingAgeing';
@@ -17,7 +19,7 @@ import { inferFilingFrequency, scoreSupplier, supplierKey } from './analyse/supp
 import { runMatchPipeline } from './match/pipeline';
 import { comparePeriods } from './normalize/period';
 import { parseGstr2b } from './parse/gstr2b';
-import { indexImsLog, parseImsLog } from './parse/imsLog';
+import { imsKey, indexImsLog, parseImsLog } from './parse/imsLog';
 import { parsePurchaseRegister } from './parse/purchaseRegister';
 import { indexSupplierMaster, parseSupplierMaster } from './parse/supplierMaster';
 import { buildFollowUpEmails } from './export/followUpEmails';
@@ -234,6 +236,12 @@ export function runAnalysis(inputs: AnalysisInputs): AnalysisResult {
         ) ?? { resolved: 0, recovered: 0 },
         creditNoteIssueValue:
           creditNoteIssues.get(gstin ?? `name:${first.supplierName.toLowerCase()}`) ?? 0,
+        booksGstinValid: gstin !== null && isGstinFullyValid(gstin),
+        wrongRecipientGstinSuspected: suspectsWrongRecipientGstin({
+          results,
+          hasImsEntry: (r) =>
+            imsIndex.has(imsKey(r.supplierGstin, r.invoiceNumberNormalized)),
+        }).suspected,
       }),
     );
   }
@@ -271,6 +279,9 @@ export function runAnalysis(inputs: AnalysisInputs): AnalysisResult {
     deemedAcceptance,
     pendingAgeing: buildPendingAgeing({ imsRows, results: matches, asOf: inputs.asOf }),
     creditNotes: buildCreditNoteReport(bookRows, portalRows, imsIndex),
+    declinedCredit: buildDeclinedCreditReport(matches, imsIndex, (result) =>
+      supplierKey(resolveGstin(result.supplierGstin, result.supplierName), result.supplierName),
+    ),
     outOfScope: dataHealth.scopeExclusions,
     mappings: outcomes.map((outcome) => outcome.mapping),
     followUpEmails: buildFollowUpEmails(suppliers, inputs.asOf),

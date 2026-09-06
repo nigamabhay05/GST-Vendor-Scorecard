@@ -1,3 +1,4 @@
+import { ATTRIBUTION } from '../config';
 import { imsKey } from '../parse/imsLog';
 import { roundRupees } from '../normalize/money';
 import type {
@@ -132,6 +133,85 @@ export function needsExplanation(result: MatchResult): boolean {
   if (!result.inScope) return false;
   if (result.status === 'missing_in_books') return false;
   return !(result.status === 'matched' && result.onTime === true && result.attribution === 'unattributed');
+}
+
+/**
+ * Whether a supplier's gaps are better explained by a wrong recipient GSTIN than by
+ * non-filing.
+ *
+ * The reasoning, which is the whole of the rule:
+ *
+ *   - Some documents are missing from every GSTR-2B period loaded.
+ *   - The same supplier has *other* invoices that arrived on time in those same
+ *     periods, which is direct evidence they filed their GSTR-1 for them.
+ *   - The missing ones have no IMS entry either, so the user did not reject or hold
+ *     them -- they never reached the buyer's IMS at all.
+ *
+ * A supplier who filed on time cannot simultaneously have not filed. What remains is
+ * that those particular invoices were reported against somebody else's GSTIN, and the
+ * credit is sitting in a stranger's 2B.
+ *
+ * This is a hypothesis and is worded as one wherever it surfaces. The other party's 2B
+ * is not visible from here and never will be, so the tool proposes the check rather than
+ * announcing the finding. It changes the suggested action and the follow-up email; it
+ * does not change the score, because the evidence does not rise to that.
+ */
+export function suspectsWrongRecipientGstin(input: {
+  results: readonly MatchResult[];
+  /** True when the IMS log has an entry for this document. */
+  hasImsEntry: (result: MatchResult) => boolean;
+}): { suspected: boolean; documents: MatchResult[]; confirmedPeriods: PeriodKey[] } {
+  const none = { suspected: false, documents: [] as MatchResult[], confirmedPeriods: [] as PeriodKey[] };
+
+  // Periods this supplier demonstrably filed for: an invoice of theirs arrived on time.
+  const confirmed = new Set<PeriodKey>();
+  let onTimeCount = 0;
+
+  for (const result of input.results) {
+    if (result.onTime !== true || result.taxReceived + result.taxNeedsCorrection <= 0) continue;
+    onTimeCount += 1;
+    const period = result.expectedPeriod ?? result.actualPeriod;
+    if (period !== null) confirmed.add(period);
+  }
+
+  if (onTimeCount < ATTRIBUTION.minOnTimeSiblingsForWrongGstin) return none;
+
+  /*
+   * Only worth raising about a supplier who is otherwise reliable. A poor filer's
+   * missing invoices are explained perfectly well by poor filing, and pointing the user
+   * at recipient GSTINs would send them down the wrong road entirely.
+   */
+  const considered = input.results.filter(
+    (result) => result.inScope && !result.notYetDue && result.status !== 'missing_in_books',
+  );
+  if (considered.length === 0) return none;
+  if (onTimeCount / considered.length < ATTRIBUTION.minCleanShareForWrongGstin) return none;
+
+  const documents = input.results.filter(
+    (result) =>
+      result.status === 'missing_in_2b' &&
+      result.inScope &&
+      !result.notYetDue &&
+      // Never reached IMS, so the user neither rejected nor held it.
+      !input.hasImsEntry(result) &&
+      result.expectedPeriod !== null &&
+      confirmed.has(result.expectedPeriod),
+  );
+
+  if (documents.length === 0) return none;
+
+  /*
+   * One stray invoice in one month is an ordinary slip. The pattern that points at a
+   * wrong GSTIN is the same thing recurring while everything else arrives on time.
+   */
+  const affectedPeriods = new Set(documents.map((result) => result.expectedPeriod));
+  if (affectedPeriods.size < ATTRIBUTION.minAffectedPeriodsForWrongGstin) return none;
+
+  return {
+    suspected: true,
+    documents,
+    confirmedPeriods: [...confirmed].sort(),
+  };
 }
 
 export function buildAttributionSplit(results: readonly MatchResult[]): AttributionSplitEntry[] {

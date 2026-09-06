@@ -231,6 +231,48 @@ export const ACTION_THRESHOLDS = {
 
   /** Expected cash loss above this is worth a partner's attention, not a clerk's. */
   materialCashLossRupees: 50_000,
+
+  /**
+   * Credit awaiting the user's own decision -- rejected or held in IMS -- above which
+   * the supplier is flagged "Your action" rather than being allowed to show OK.
+   *
+   * Set deliberately low. The cost of flagging a small one is a glance; the cost of
+   * missing a large one is the credit itself.
+   */
+  materialUserActionRupees: 25_000,
+} as const;
+
+/**
+ * Attribution thresholds.
+ */
+export const ATTRIBUTION = {
+  /**
+   * How many of a supplier's invoices must have arrived on time before their other
+   * gaps can be read as a wrong recipient GSTIN rather than as non-filing.
+   *
+   * Two is enough to establish that the supplier files, and low enough that a small
+   * supplier is not excluded from the check by volume alone.
+   */
+  minOnTimeSiblingsForWrongGstin: 2,
+
+  /**
+   * How reliable a supplier must be before non-filing stops being the likelier reading.
+   *
+   * A supplier who misses a third of their filings is simply a poor filer, and telling
+   * the user to go and ask about recipient GSTINs would send them down the wrong road.
+   * The hypothesis is only worth raising about a supplier whose record is otherwise
+   * strong -- that is what makes the missing few anomalous rather than typical.
+   */
+  minCleanShareForWrongGstin: 0.7,
+
+  /**
+   * How many distinct periods the unexplained documents must span.
+   *
+   * One invoice going astray in one month is an ordinary slip. The same thing happening
+   * across several months, while everything else from that supplier arrives on time, is
+   * the signature of a wrong recipient GSTIN sitting in their billing master.
+   */
+  minAffectedPeriodsForWrongGstin: 2,
 } as const;
 
 // -------------------------------------------------------- parsing behaviour
@@ -266,5 +308,6 @@ export const CONFIG = {
   AGEING,
   SCOPE,
   ACTION_THRESHOLDS,
+  ATTRIBUTION,
   PARSING,
 } as const;

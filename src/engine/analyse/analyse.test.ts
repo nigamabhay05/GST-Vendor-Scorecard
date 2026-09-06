@@ -5,6 +5,7 @@ import {
   buildAttributionSplit,
   isRecipientCause,
   isSupplierFault,
+  suspectsWrongRecipientGstin,
   type AttributionContext,
 } from './attribution';
 import { bucketForAge, buildPendingAgeing, deadlineFlagFor } from './pendingAgeing';
@@ -148,6 +149,120 @@ describe('attribution', () => {
   });
 });
 
+describe('suspectsWrongRecipientGstin', () => {
+  const never = () => false;
+
+  /** Ten clean documents and three that reached neither 2B nor IMS. */
+  const nandiShape = () => [
+    ...['2026-01', '2026-02', '2026-03'].flatMap((period, p) =>
+      [0, 1, 2].map((n) =>
+        match({
+          id: `ok-${String(p)}-${String(n)}`,
+          expectedPeriod: period,
+          actualPeriod: period,
+          onTime: true,
+        }),
+      ),
+    ),
+    match({ id: 'ok-extra', expectedPeriod: '2026-01', actualPeriod: '2026-01', onTime: true }),
+    ...['2026-01', '2026-02', '2026-03'].map((period, i) =>
+      match({
+        id: `gap-${String(i)}`,
+        status: 'missing_in_2b',
+        tier: null,
+        portalRowId: null,
+        taxReceived: 0,
+        taxAtRisk: 15_000,
+        onTime: null,
+        expectedPeriod: period,
+        actualPeriod: null,
+      }),
+    ),
+  ];
+
+  it('fires when matched siblings prove on-time filing in the same periods', () => {
+    const verdict = suspectsWrongRecipientGstin({
+      results: nandiShape(),
+      hasImsEntry: never,
+    });
+
+    expect(verdict.suspected).toBe(true);
+    expect(verdict.documents).toHaveLength(3);
+    expect(verdict.confirmedPeriods).toEqual(['2026-01', '2026-02', '2026-03']);
+  });
+
+  it('stays silent when the supplier has no on-time filing to point to', () => {
+    // Every document missing. Non-filing explains this perfectly well.
+    const allMissing = ['2026-01', '2026-02', '2026-03'].map((period, i) =>
+      match({
+        id: `gap-${String(i)}`,
+        status: 'missing_in_2b',
+        portalRowId: null,
+        taxReceived: 0,
+        taxAtRisk: 15_000,
+        onTime: null,
+        expectedPeriod: period,
+        actualPeriod: null,
+      }),
+    );
+
+    expect(suspectsWrongRecipientGstin({ results: allMissing, hasImsEntry: never }).suspected).toBe(
+      false,
+    );
+  });
+
+  it('stays silent when the user rejected or held the document', () => {
+    // Present in IMS means it reached the buyer, so the recipient GSTIN was right.
+    const verdict = suspectsWrongRecipientGstin({
+      results: nandiShape(),
+      hasImsEntry: () => true,
+    });
+    expect(verdict.suspected).toBe(false);
+  });
+
+  it('stays silent for a gap in a period the supplier never filed for', () => {
+    const results = [
+      ...['2026-01', '2026-02'].map((period, i) =>
+        match({ id: `ok-${String(i)}`, expectedPeriod: period, actualPeriod: period }),
+      ),
+      match({
+        id: 'gap',
+        status: 'missing_in_2b',
+        portalRowId: null,
+        taxReceived: 0,
+        taxAtRisk: 15_000,
+        onTime: null,
+        // No matched sibling in this period, so nothing rules out non-filing.
+        expectedPeriod: '2026-09',
+        actualPeriod: null,
+      }),
+    ];
+
+    expect(suspectsWrongRecipientGstin({ results, hasImsEntry: never }).suspected).toBe(false);
+  });
+
+  it('ignores documents that are not due yet', () => {
+    const results = [
+      ...['2026-01', '2026-02'].map((period, i) =>
+        match({ id: `ok-${String(i)}`, expectedPeriod: period, actualPeriod: period }),
+      ),
+      match({
+        id: 'gap',
+        status: 'missing_in_2b',
+        portalRowId: null,
+        notYetDue: true,
+        taxReceived: 0,
+        taxAtRisk: 0,
+        onTime: null,
+        expectedPeriod: '2026-02',
+        actualPeriod: null,
+      }),
+    ];
+
+    expect(suspectsWrongRecipientGstin({ results, hasImsEntry: never }).suspected).toBe(false);
+  });
+});
+
 // ----------------------------------------------------------------- scoring
 
 describe('supplier scoring', () => {
@@ -162,6 +277,8 @@ describe('supplier scoring', () => {
     globalRecovery: { resolved: 40, recovered: 20 },
     supplierRecovery: { resolved: 0, recovered: 0 },
     creditNoteIssueValue: 0,
+    booksGstinValid: true,
+    wrongRecipientGstinSuspected: false,
   };
 
   it('returns Insufficient history for a supplier with only two periods', () => {
@@ -284,7 +401,7 @@ describe('supplier scoring', () => {
     it('still keeps the value out of ITC at risk, and names it as needing correction', () => {
       expect(result.itcAtRisk).toBe(0);
       expect(result.needsCorrectionValue).toBe(72000);
-      expect(result.suggestedAction).toMatch(/different GSTIN/i);
+      expect(result.suggestedAction).toMatch(/different registration of the same PAN/i);
     });
   });
 
@@ -310,6 +427,169 @@ describe('supplier scoring', () => {
     });
 
     expect(many.components.volatility).toBe(0);
+  });
+
+  /*
+   * A supplier who filed everything on time, whose credit the user then rejected in IMS.
+   *
+   * Rejections used to land in ITC at risk and flow through into expected cash loss via
+   * a recovery rate -- but a recovery rate models whether a supplier eventually files,
+   * and this supplier already did. Recovering the credit is a sequence of user actions,
+   * not a probability. And the remarks show most rejections are correct, so the credit
+   * was never claimable in the first place.
+   */
+  describe('a supplier whose credit the user rejected', () => {
+    const periods = ['2026-01', '2026-02', '2026-03'];
+
+    const rejected = (period: string, index: number) =>
+      match({
+        id: `rej-${String(index)}`,
+        status: 'missing_in_2b',
+        tier: null,
+        portalRowId: null,
+        creditTreatment: 'at_risk',
+        attribution: 'recipient_rejected',
+        taxReceived: 0,
+        taxAtRisk: 61_108,
+        onTime: null,
+        expectedPeriod: period,
+        actualPeriod: null,
+      });
+
+    // Clean matched volume alongside, so the supplier is scoreable.
+    const clean = periods.map((period, i) =>
+      match({ id: `ok-${String(i)}`, expectedPeriod: period, actualPeriod: period }),
+    );
+
+    const result = scoreSupplier({
+      ...baseInput,
+      scoringPeriods: periods,
+      results: [...clean, ...periods.map((period, i) => rejected(period, i))],
+    });
+
+    it('keeps rejected credit out of ITC at risk', () => {
+      expect(result.itcAtRisk).toBe(0);
+    });
+
+    it('keeps rejected credit out of expected cash loss', () => {
+      expect(result.expectedCashLoss).toBe(0);
+    });
+
+    it('reports it in its own bucket instead, at full value', () => {
+      expect(result.declinedValue).toBe(183_324);
+    });
+
+    it('does not blame the supplier for it', () => {
+      expect(result.components.matchRate).toBe(1);
+      expect(result.components.disputeRate).toBe(0);
+      expect(result.score).toBe(100);
+    });
+
+    /*
+     * The score is 100 and deserves to be -- but the flag is the only column most
+     * readers scan, and OK beside a six-figure gap is misleading.
+     */
+    it('does not render as OK, because the gap is waiting on the user', () => {
+      expect(result.flag).not.toBe('green');
+      expect(result.flag).toBe('user_action');
+      expect(result.suggestedAction).toMatch(/your decision/i);
+    });
+  });
+
+  it('leaves a supplier flagged OK when the user-caused gap is immaterial', () => {
+    const periods = ['2026-01', '2026-02', '2026-03'];
+    const result = scoreSupplier({
+      ...baseInput,
+      scoringPeriods: periods,
+      results: [
+        ...periods.map((period, i) =>
+          match({ id: `ok-${String(i)}`, expectedPeriod: period, actualPeriod: period }),
+        ),
+        match({
+          id: 'small',
+          status: 'missing_in_2b',
+          portalRowId: null,
+          attribution: 'recipient_rejected',
+          taxReceived: 0,
+          taxAtRisk: 900,
+          onTime: null,
+          expectedPeriod: '2026-01',
+          actualPeriod: null,
+        }),
+      ],
+    });
+
+    expect(result.flag).toBe('green');
+  });
+
+  /*
+   * A GSTIN that fails its own check digit is not a real registration, so the mismatch
+   * is our typing error, not the supplier's filing error. Telling the user to chase a
+   * supplier over their own vendor master would waste the call and the goodwill.
+   */
+  it('tells the user to fix their own master when the books GSTIN fails checksum', () => {
+    const periods = ['2026-01', '2026-02', '2026-03'];
+    const tierFour = periods.map((period, i) =>
+      match({
+        id: `t4-${String(i)}`,
+        status: 'gstin_state_mismatch',
+        tier: 4,
+        creditTreatment: 'needs_correction',
+        taxReceived: 0,
+        taxAtRisk: 0,
+        taxNeedsCorrection: 18_000,
+        onTime: true,
+        expectedPeriod: period,
+        actualPeriod: period,
+      }),
+    );
+
+    const ourError = scoreSupplier({
+      ...baseInput,
+      booksGstinValid: false,
+      scoringPeriods: periods,
+      results: tierFour,
+    });
+    expect(ourError.suggestedAction).toMatch(/your own vendor master/i);
+    expect(ourError.suggestedAction).not.toMatch(/ask the supplier/i);
+
+    const theirRegistration = scoreSupplier({
+      ...baseInput,
+      booksGstinValid: true,
+      scoringPeriods: periods,
+      results: tierFour,
+    });
+    expect(theirRegistration.suggestedAction).toMatch(/different registration of the same PAN/i);
+  });
+
+  it('raises the wrong-recipient-GSTIN hypothesis in the suggested action', () => {
+    const periods = ['2026-01', '2026-02', '2026-03'];
+    const result = scoreSupplier({
+      ...baseInput,
+      wrongRecipientGstinSuspected: true,
+      scoringPeriods: periods,
+      results: [
+        ...periods.map((period, i) =>
+          match({ id: `ok-${String(i)}`, expectedPeriod: period, actualPeriod: period }),
+        ),
+        match({
+          id: 'gap',
+          status: 'missing_in_2b',
+          portalRowId: null,
+          attribution: 'supplier_never_reported',
+          taxReceived: 0,
+          taxAtRisk: 12_000,
+          onTime: null,
+          expectedPeriod: '2026-02',
+          actualPeriod: null,
+        }),
+      ],
+    });
+
+    // Worded as a hypothesis, and pointing at GSTR-1A rather than at filing.
+    expect(result.suggestedAction).toMatch(/unlikely to be non-filing/i);
+    expect(result.suggestedAction).toMatch(/GSTR-1A/);
+    expect(result.suggestedAction).not.toMatch(/ask for their GSTR-1 filing date/i);
   });
 
   it('excludes blocked credits from ITC at risk', () => {
@@ -359,9 +639,16 @@ describe('supplier scoring', () => {
 
     expect(result.components.matchRate).toBe(1);
     expect(result.components.disputeRate).toBe(0);
-    // The money is still reported as at risk: the buyer really has lost this credit.
-    expect(result.itcAtRisk).toBe(54000);
-    expect(result.suggestedAction).toMatch(/your own IMS decisions/i);
+    /*
+     * Not at risk, and not an expected loss. The supplier filed, so there is no filing
+     * behaviour for a recovery rate to model, and a rejection is usually correct --
+     * goods never received, duplicate already booked. It is reported for review instead.
+     */
+    expect(result.itcAtRisk).toBe(0);
+    expect(result.expectedCashLoss).toBe(0);
+    expect(result.declinedValue).toBe(54000);
+    expect(result.flag).toBe('user_action');
+    expect(result.suggestedAction).toMatch(/your decision, not theirs/i);
   });
 
   it('labels which recovery rate it used', () => {

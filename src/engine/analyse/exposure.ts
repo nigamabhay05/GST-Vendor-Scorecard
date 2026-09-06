@@ -3,6 +3,8 @@ import { imsKey } from '../parse/imsLog';
 import type {
   BookRow,
   CreditNoteReport,
+  DeclinedCreditReport,
+  DeclinedCreditRow,
   HeadlineKpis,
   ImsLogRow,
   MatchResult,
@@ -10,6 +12,7 @@ import type {
   Portal2bRow,
   SupplierScorecardEntry,
 } from '../types';
+import { isRecipientCause } from './attribution';
 import { valueOf, type RecoveryInput } from './supplierScore';
 
 /**
@@ -46,6 +49,16 @@ export function computeRecovery(
     // A document whose expected period is the newest one loaded has had no later period
     // in which to appear, so it is not evidence either way.
     if (lastPeriod !== null && expected === lastPeriod) continue;
+
+    /*
+     * A recovery rate models one thing: whether a supplier who has not reported yet
+     * eventually does. A gap the user caused answers no question about the supplier --
+     * they filed, on time, and the record is absent because it was rejected or is being
+     * held. Such a gap can never "recover" in the data, so leaving it in drags the rate
+     * down for every supplier in the file and inflates expected cash loss across the
+     * board.
+     */
+    if (isRecipientCause(result.attribution)) continue;
 
     const wasGap = result.status === 'missing_in_2b' || result.onTime === false;
     if (!wasGap) continue;
@@ -186,6 +199,55 @@ export function creditNoteIssueValueBySupplier(
   return bySupplier;
 }
 
+/**
+ * Credit the user declined in IMS, gathered for review.
+ *
+ * Deliberately carries no verdict. Whether a rejection was right turns on whether the
+ * goods arrived and whether the document was already booked -- neither of which is in
+ * any file this tool reads. So it lists the documents with the remark the user wrote at
+ * the time and leaves the judgement to someone who can make it.
+ */
+export function buildDeclinedCreditReport(
+  results: readonly MatchResult[],
+  imsIndex: Map<string, ImsLogRow>,
+  supplierKeyOf: (result: MatchResult) => string,
+): DeclinedCreditReport {
+  const rows: DeclinedCreditRow[] = [];
+
+  for (const result of results) {
+    if (result.attribution !== 'recipient_rejected') continue;
+
+    const ims = imsIndex.get(imsKey(result.supplierGstin, result.invoiceNumberNormalized));
+
+    rows.push({
+      supplierKey: supplierKeyOf(result),
+      supplierName: result.supplierName,
+      supplierGstin: result.supplierGstin,
+      invoiceNumber: result.invoiceNumber,
+      invoiceDate: result.invoiceDate,
+      period: result.expectedPeriod,
+      taxValue: roundRupees(result.taxAtRisk),
+      remark: ims?.remark ?? null,
+      actionDate: ims?.actionDate ?? null,
+    });
+  }
+
+  // Largest first: if a reviewer only gets through half the list, it should be the half
+  // that matters.
+  rows.sort(
+    (a, b) =>
+      b.taxValue - a.taxValue ||
+      a.supplierName.localeCompare(b.supplierName) ||
+      a.invoiceNumber.localeCompare(b.invoiceNumber),
+  );
+
+  return {
+    rows,
+    count: rows.length,
+    taxValue: roundRupees(rows.reduce((sum, row) => sum + row.taxValue, 0)),
+  };
+}
+
 /** Total in-scope tax across every result. The denominator for concentration. */
 export function totalInScopeItcOf(results: readonly MatchResult[]): number {
   return roundRupees(
@@ -207,6 +269,10 @@ export function buildHeadlineKpis(
     totalItcAtRisk: roundRupees(suppliers.reduce((sum, s) => sum + s.itcAtRisk, 0)),
     expectedCashLoss: roundRupees(suppliers.reduce((sum, s) => sum + s.expectedCashLoss, 0)),
     redSupplierCount: suppliers.filter((s) => s.flag === 'red').length,
+    userActionSupplierCount: suppliers.filter((s) => s.flag === 'user_action').length,
+    suppliersNeedingAttention: suppliers.filter(
+      (s) => s.flag === 'red' || s.flag === 'user_action',
+    ).length,
     deemedAcceptedShare,
     deemedAcceptedCount,
     totalInScopeItc,

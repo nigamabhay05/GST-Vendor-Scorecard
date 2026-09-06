@@ -26,6 +26,13 @@ export const FLAG_PRESENTATION: Record<SupplierFlag, FlagPresentation> = {
   red: { label: 'At risk', glyph: '■', className: 'text-flag-red bg-flag-red-tint' },
   amber: { label: 'Watch', glyph: '▲', className: 'text-flag-amber bg-flag-amber-tint' },
   green: { label: 'OK', glyph: '●', className: 'text-flag-green bg-flag-green-tint' },
+  // Its own shape and word, not a shade between amber and red: this is not a worse
+  // supplier, it is a decision waiting on the reader.
+  user_action: {
+    label: 'Your action',
+    glyph: '◆',
+    className: 'text-accent bg-accent-tint',
+  },
   insufficient_history: {
     label: 'Insufficient history',
     glyph: '–',
