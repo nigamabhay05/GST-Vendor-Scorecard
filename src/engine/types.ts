@@ -396,6 +396,8 @@ export interface DataHealthReport {
   gstinIssues: GstinIssue[];
   unparseableDates: UnparseableDate[];
   ambiguousDateColumns: AmbiguousDateColumn[];
+  /** Fields where more than one column could have been the source. */
+  ambiguousColumnMappings: AmbiguousColumnMapping[];
   normalizationCollisions: NormalizationCollision[];
   duplicateInvoices: DuplicateInvoiceGroup[];
   scopeExclusions: ScopeExclusionSummary[];
@@ -671,6 +673,31 @@ export interface FieldMapping {
   required: boolean;
   /** One-line statement of what the field is for, shown beside the row. */
   hint: string;
+  /**
+   * Other headers in the same file that also looked like this field.
+   *
+   * A Tally register carrying both `Voucher No.` (the buyer's internal number) and
+   * `Invoice No.` (the supplier's, which is what reaches GSTR-2B) is the case this
+   * exists for. Picking the wrong one costs nothing visible -- matching simply stops
+   * finding anything -- so the runner-up is always named rather than discarded.
+   */
+  alternatives: string[];
+}
+
+/**
+ * A field that more than one column could have filled.
+ *
+ * Reported in Data Health because the failure is silent: the analysis completes, the
+ * figures look plausible, and every one of them is wrong.
+ */
+export interface AmbiguousColumnMapping {
+  kind: FileKind;
+  fileName: string;
+  /** Canonical engine field name. */
+  field: string;
+  label: string;
+  chosenHeader: string;
+  alternatives: string[];
 }
 
 export interface FileMapping {

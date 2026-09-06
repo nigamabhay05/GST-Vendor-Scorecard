@@ -1,9 +1,11 @@
 import { findNormalizationCollisions } from '../normalize/invoiceNumber';
 import { roundRupees, totalTax } from '../normalize/money';
 import type {
+  AmbiguousColumnMapping,
   BookRow,
   DataHealthReport,
   DuplicateInvoiceGroup,
+  FileMapping,
   NormalizationCollision,
   ParseOutcome,
   Portal2bRow,
@@ -155,6 +157,38 @@ export function summariseScopeExclusions(rows: readonly BookRow[]): ScopeExclusi
   return [...totals.values()].sort((a, b) => b.taxValue - a.taxValue);
 }
 
+/**
+ * Fields where more than one column in the file could have been the source.
+ *
+ * This is reported even when the engine is confident it chose correctly, because the
+ * failure mode is invisible. A register offering both `Voucher No.` and `Invoice No.`
+ * will analyse cleanly whichever is picked -- but pick the voucher number and nothing
+ * will ever match GSTR-2B, since the portal carries the supplier's number. The user is
+ * the only one who can confirm which column is which.
+ */
+export function findAmbiguousColumnMappings(
+  mappings: readonly FileMapping[],
+): AmbiguousColumnMapping[] {
+  const ambiguous: AmbiguousColumnMapping[] = [];
+
+  for (const mapping of mappings) {
+    for (const field of mapping.fields) {
+      if (field.sourceHeader === null || field.alternatives.length === 0) continue;
+
+      ambiguous.push({
+        kind: mapping.kind,
+        fileName: mapping.fileName,
+        field: field.field,
+        label: field.label,
+        chosenHeader: field.sourceHeader,
+        alternatives: [...field.alternatives],
+      });
+    }
+  }
+
+  return ambiguous;
+}
+
 export interface DataHealthInput {
   outcomes: ReadonlyArray<ParseOutcome<BookRow> | ParseOutcome<Portal2bRow> | ParseOutcome<unknown>>;
   bookRows: readonly BookRow[];
@@ -168,6 +202,9 @@ export function buildDataHealthReport(input: DataHealthInput): DataHealthReport 
     gstinIssues: input.outcomes.flatMap((o) => o.gstinIssues),
     unparseableDates: input.outcomes.flatMap((o) => o.unparseableDates),
     ambiguousDateColumns,
+    ambiguousColumnMappings: findAmbiguousColumnMappings(
+      input.outcomes.map((outcome) => outcome.mapping),
+    ),
     normalizationCollisions: findBookCollisions(input.bookRows),
     duplicateInvoices: findDuplicateInvoices(input.bookRows),
     scopeExclusions: summariseScopeExclusions(input.bookRows),

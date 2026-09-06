@@ -86,9 +86,10 @@ export const PURCHASE_REGISTER_FIELDS: FieldSpec[] = [
       'doc no',
       'invoice',
       'supplier invoice no',
-      'reference no',
-      'voucher no',
     ],
+    // A register's own numbering, not the supplier's. Used only when nothing better
+    // exists, and always flagged, because GSTR-2B carries the supplier's number.
+    fallbackSynonyms: ['reference no', 'voucher no'],
   },
   {
     field: 'invoiceDate',
@@ -101,9 +102,9 @@ export const PURCHASE_REGISTER_FIELDS: FieldSpec[] = [
       'bill date',
       'document date',
       'doc date',
-      'date',
-      'voucher date',
     ],
+    // 'Date' alone is often the booking date rather than the document date.
+    fallbackSynonyms: ['date', 'voucher date'],
   },
   {
     field: 'taxableValue',

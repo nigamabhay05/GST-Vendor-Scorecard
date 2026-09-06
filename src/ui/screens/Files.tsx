@@ -278,6 +278,9 @@ function MappingTables({
                                 ...entry,
                                 sourceHeader: event.target.value === '' ? null : event.target.value,
                                 confidence: event.target.value === '' ? 'none' : 'exact',
+                                // The user has settled it; the engine's runner-up is
+                                // no longer worth warning about.
+                                alternatives: [],
                               }
                             : entry,
                         ),
@@ -302,6 +305,11 @@ function MappingTables({
                   )}
                   {field.confidence === 'none' && (
                     <span className="text-ink-muted">– Not found</span>
+                  )}
+                  {field.alternatives.length > 0 && (
+                    <div className="text-ink-muted mt-0.5 text-[11px]">
+                      also matched: <span className="num">{field.alternatives.join(', ')}</span>
+                    </div>
                   )}
                 </td>
                 <td className="text-ink-muted px-3 py-1.5">{field.hint}</td>

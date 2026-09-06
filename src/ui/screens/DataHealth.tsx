@@ -54,6 +54,59 @@ export function DataHealth({
         </div>
       )}
 
+      {health.ambiguousColumnMappings.length > 0 && (
+        <section className="border-rule mt-6 border-t pt-5">
+          <SectionHeading>Columns worth confirming</SectionHeading>
+          <p className="text-ink-muted mt-1 max-w-2xl text-[13px]">
+            More than one column could have filled these fields. The choice below is the
+            engine&rsquo;s best reading — check it, because picking the wrong column does
+            not produce an error, it produces a clean-looking analysis of the wrong data.
+            A register&rsquo;s <span className="num">Voucher No.</span> is its own internal
+            numbering; GSTR-2B carries the supplier&rsquo;s{' '}
+            <span className="num">Invoice No.</span>, and matching on the wrong one finds
+            nothing.
+          </p>
+
+          <table className="mt-3 w-full max-w-3xl border-collapse text-[13px]">
+            <thead>
+              <tr className="border-rule text-ink-muted border-b text-[11px]">
+                <th scope="col" className="px-3 py-2 text-left font-normal">
+                  File
+                </th>
+                <th scope="col" className="px-3 py-2 text-left font-normal">
+                  Field
+                </th>
+                <th scope="col" className="px-3 py-2 text-left font-normal">
+                  Using
+                </th>
+                <th scope="col" className="px-3 py-2 text-left font-normal">
+                  Also possible
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {health.ambiguousColumnMappings.map((entry) => (
+                <tr
+                  key={`${entry.fileName}:${entry.field}`}
+                  className="border-rule border-b"
+                >
+                  <td className="num px-3 py-1.5 text-left">{entry.fileName}</td>
+                  <td className="px-3 py-1.5">{entry.label}</td>
+                  <td className="num text-ink px-3 py-1.5 text-left">{entry.chosenHeader}</td>
+                  <td className="num text-ink-muted px-3 py-1.5 text-left">
+                    {entry.alternatives.join(', ')}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <p className="text-ink-muted mt-2 text-[12px]">
+            To change one, go back to Files and mapping and pick the column yourself.
+          </p>
+        </section>
+      )}
+
       {health.ambiguousDateColumns.length > 0 && (
         <section className="border-rule mt-6 border-t pt-5">
           <SectionHeading>Ambiguous date columns</SectionHeading>

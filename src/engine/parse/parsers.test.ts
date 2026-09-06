@@ -82,6 +82,95 @@ describe('autoMapFields', () => {
     expect(gstin?.sourceHeader).toBeNull();
   });
 
+  /*
+   * Regression: a Tally register carrying both the buyer's own voucher numbering and the
+   * supplier's invoice number.
+   *
+   * The mapper used to take whichever column appeared first in the file and label it
+   * "Exact". With Voucher No. sitting to the left of Invoice No., every book row was
+   * keyed by PUR/0001 while GSTR-2B carried VCP/25-26/001 -- so tiers 1 and 4 never fired
+   * once in a whole run, everything fell through to tier 3's value-and-date match, and
+   * the IMS join failed. Nothing in the output looked broken.
+   */
+  describe('a register with both Voucher No. and Invoice No.', () => {
+    const TALLY_HEADERS = [
+      'Date',
+      'Particulars',
+      'Voucher Type',
+      'Voucher No.',
+      'Voucher Date',
+      'Invoice No.',
+      'Invoice Date',
+      'GSTIN/UIN',
+      'Taxable Value',
+      'CGST',
+      'SGST',
+    ];
+
+    const mapping = autoMapFields(TALLY_HEADERS, PURCHASE_REGISTER_FIELDS);
+    const byField = new Map(mapping.map((m) => [m.field, m]));
+
+    it('takes the supplier’s invoice number, not the internal voucher number', () => {
+      expect(byField.get('invoiceNumber')?.sourceHeader).toBe('Invoice No.');
+    });
+
+    it('takes the invoice date, not the voucher date or the bare Date column', () => {
+      expect(byField.get('invoiceDate')?.sourceHeader).toBe('Invoice Date');
+    });
+
+    it('names the columns it passed over, so the choice can be checked', () => {
+      expect(byField.get('invoiceNumber')?.alternatives).toContain('Voucher No.');
+      expect(byField.get('invoiceDate')?.alternatives).toEqual(
+        expect.arrayContaining(['Voucher Date', 'Date']),
+      );
+    });
+
+    it('still maps the surrounding columns correctly', () => {
+      expect(byField.get('supplierName')?.sourceHeader).toBe('Particulars');
+      expect(byField.get('supplierGstin')?.sourceHeader).toBe('GSTIN/UIN');
+      expect(byField.get('docType')?.sourceHeader).toBe('Voucher Type');
+      expect(byField.get('taxableValue')?.sourceHeader).toBe('Taxable Value');
+    });
+
+    it('does not depend on the order the columns appear in', () => {
+      const reversed = autoMapFields([...TALLY_HEADERS].reverse(), PURCHASE_REGISTER_FIELDS);
+      const reversedByField = new Map(reversed.map((m) => [m.field, m]));
+
+      expect(reversedByField.get('invoiceNumber')?.sourceHeader).toBe('Invoice No.');
+      expect(reversedByField.get('invoiceDate')?.sourceHeader).toBe('Invoice Date');
+    });
+
+    it('falls back to the voucher number only when nothing better exists', () => {
+      // A register with no supplier invoice number at all. The voucher number is the
+      // only candidate, so it is used -- but never as an exact match, because it is
+      // very likely the wrong thing to match GSTR-2B on.
+      const withoutInvoiceNo = autoMapFields(
+        ['Particulars', 'Voucher No.', 'Voucher Date', 'GSTIN/UIN', 'Taxable Value'],
+        PURCHASE_REGISTER_FIELDS,
+      );
+      const field = withoutInvoiceNo.find((m) => m.field === 'invoiceNumber');
+
+      expect(field?.sourceHeader).toBe('Voucher No.');
+      expect(field?.confidence).toBe('fuzzy');
+    });
+  });
+
+  it('never labels a fallback or an edit-distance match as exact', () => {
+    const mapping = autoMapFields(
+      ['Particulars', 'Voucher No.', 'Date', 'GSTIN/UIN', 'Taxble Value'],
+      PURCHASE_REGISTER_FIELDS,
+    );
+
+    for (const field of mapping) {
+      if (field.sourceHeader === null) continue;
+      // Anything that was not a primary spelling must read as a guess.
+      const wasPrimarySpelling = ['Particulars', 'GSTIN/UIN'].includes(field.sourceHeader);
+      if (!wasPrimarySpelling) {
+        expect(field.confidence, `${field.label} -> ${field.sourceHeader}`).toBe('fuzzy');
+      }
+    }
+  });
+
   it('never assigns one header to two fields', () => {
     const mapping = autoMapFields(
       ['Supplier Name', 'GSTIN', 'Invoice No', 'Invoice Date', 'Taxable Value', 'CGST', 'SGST'],
@@ -439,6 +528,36 @@ describe('data health aggregation', () => {
     expect(duplicates[0]?.invoiceNumber).toBe('VC/7');
     expect(duplicates[0]?.identicalValues).toBe(true);
     expect(findBookCollisions(outcome.rows).some((c) => c.normalizedKey === 'VC7')).toBe(false);
+  });
+
+  it('reports a field that more than one column could have filled', () => {
+    const outcome = parsePurchaseRegister(
+      registerFile(
+        [
+          'Particulars,GSTIN/UIN,Voucher No.,Invoice No.,Invoice Date,Taxable Value',
+          'Sharma Steel,27AAPFU0939F1ZV,PUR/0001,VCP/25-26/001,25/04/2026,1000',
+        ].join('\n'),
+        'tally-export.csv',
+      ),
+    );
+
+    const report = buildDataHealthReport({ outcomes: [outcome], bookRows: outcome.rows });
+    const invoiceNumber = report.ambiguousColumnMappings.find(
+      (entry) => entry.field === 'invoiceNumber',
+    );
+
+    expect(invoiceNumber?.chosenHeader).toBe('Invoice No.');
+    expect(invoiceNumber?.alternatives).toContain('Voucher No.');
+    expect(invoiceNumber?.fileName).toBe('tally-export.csv');
+
+    // And the row really was read from the supplier's number, not the voucher number.
+    expect(outcome.rows[0]?.invoiceNumber).toBe('VCP/25-26/001');
+  });
+
+  it('says nothing when every field had exactly one candidate', () => {
+    const outcome = parsePurchaseRegister(registerFile(MESSY_REGISTER_CSV));
+    const report = buildDataHealthReport({ outcomes: [outcome], bookRows: outcome.rows });
+    expect(report.ambiguousColumnMappings).toHaveLength(0);
   });
 
   it('blocks the report only while an ambiguous date column is unanswered', () => {

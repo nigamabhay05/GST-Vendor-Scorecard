@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx';
 import { PARSING } from '../config';
 import { asText } from '../normalize/text';
 import { levenshtein } from '../normalize/invoiceNumber';
-import type { FieldMapping, MappingConfidence } from '../types';
+import type { FieldMapping } from '../types';
 
 /**
  * Generic reader for the spreadsheets people actually have.
@@ -82,8 +82,21 @@ export interface FieldSpec {
   label: string;
   hint: string;
   required: boolean;
-  /** Header spellings seen in real exports. Compared after `normalizeHeader`. */
+  /**
+   * Header spellings that identify this field confidently, **best first**.
+   *
+   * Order is meaningful: when a file contains more than one of these, the earliest in
+   * this list wins, whatever order the columns appear in.
+   */
   synonyms: string[];
+  /**
+   * Spellings that usually mean this field but sometimes mean something else.
+   *
+   * Only considered once no primary synonym matches, and never reported as an exact
+   * match -- `Voucher No.` is a register's own numbering, not the supplier's, so a file
+   * offering nothing better deserves a second look rather than silent confidence.
+   */
+  fallbackSynonyms?: string[];
 }
 
 export interface HeaderDetection {
@@ -149,12 +162,90 @@ export function detectHeaderRow(rows: readonly unknown[][], specs: readonly Fiel
 }
 
 /**
- * Matches file headers to engine fields, exactly where possible and by edit distance
- * otherwise.
+ * How good a candidate column is for a field. Lower is better.
  *
- * Fuzzy matching is deliberately conservative and always reports its confidence,
- * because the mapping screen exists precisely so a wrong guess can be corrected by the
- * person who knows what the column means.
+ * The bands are kept far apart so a primary synonym at any position always beats a
+ * fallback, and any fallback always beats an edit-distance guess. Within a band the
+ * offset is the synonym's own position, which is why the synonym lists are written
+ * best-first.
+ */
+const PRIMARY_BAND = 0;
+const FALLBACK_BAND = 1000;
+const FUZZY_BAND = 2000;
+
+type CandidateKind = 'primary' | 'fallback' | 'fuzzy';
+
+interface HeaderCandidate {
+  raw: string;
+  rank: number;
+  kind: CandidateKind;
+}
+
+/** Every column that could plausibly be this field, best first. */
+function candidatesFor(
+  spec: FieldSpec,
+  headers: ReadonlyArray<{ raw: string; key: string }>,
+  claimed: ReadonlySet<string>,
+  /**
+   * Header spellings that name some *other* field exactly.
+   *
+   * These are excluded from edit-distance matching, which otherwise produces confident
+   * nonsense: `SGST` is one character from `cgst`, so without this the SGST column
+   * registers as a candidate for CGST. A column that already names another field
+   * precisely is not a near-miss for this one.
+   */
+  namedByOtherFields: ReadonlySet<string>,
+): HeaderCandidate[] {
+  const primary = spec.synonyms.map(normalizeHeader);
+  const fallback = (spec.fallbackSynonyms ?? []).map(normalizeHeader);
+
+  const candidates: HeaderCandidate[] = [];
+
+  for (const header of headers) {
+    if (header.key === '' || claimed.has(header.raw)) continue;
+
+    const primaryIndex = primary.indexOf(header.key);
+    if (primaryIndex >= 0) {
+      candidates.push({ raw: header.raw, rank: PRIMARY_BAND + primaryIndex, kind: 'primary' });
+      continue;
+    }
+
+    const fallbackIndex = fallback.indexOf(header.key);
+    if (fallbackIndex >= 0) {
+      candidates.push({ raw: header.raw, rank: FALLBACK_BAND + fallbackIndex, kind: 'fallback' });
+      continue;
+    }
+
+    if (namedByOtherFields.has(header.key)) continue;
+
+    // Edit distance against every spelling, primary and fallback alike.
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const synonym of [...primary, ...fallback]) {
+      const distance = levenshtein(header.key, synonym, PARSING.headerFuzzyMaxDistance);
+      if (distance < bestDistance) bestDistance = distance;
+    }
+    if (bestDistance <= PARSING.headerFuzzyMaxDistance) {
+      candidates.push({ raw: header.raw, rank: FUZZY_BAND + bestDistance, kind: 'fuzzy' });
+    }
+  }
+
+  // Rank first, then file order, so the result never depends on object iteration order.
+  return candidates.sort((a, b) => a.rank - b.rank);
+}
+
+/**
+ * Matches file headers to engine fields.
+ *
+ * The rule that matters: a field takes the column matching its *best* spelling, not the
+ * first column that happens to match any of them. A Tally register listing `Voucher No.`
+ * before `Invoice No.` used to hand the buyer's internal voucher number to the matcher
+ * and label it "Exact" -- after which no invoice could ever be found in GSTR-2B, every
+ * tier-1 and tier-4 match silently vanished, and the IMS join failed too. Nothing about
+ * the output looked wrong; it was simply built on the wrong column.
+ *
+ * Fields are resolved in order of how well they matched rather than the order they are
+ * declared, so a field with an unambiguous primary match claims its column before a
+ * weaker field can take it by being listed first.
  */
 export function autoMapFields(
   headers: readonly string[],
@@ -162,62 +253,75 @@ export function autoMapFields(
 ): FieldMapping[] {
   const normalizedHeaders = headers.map((h) => ({ raw: h, key: normalizeHeader(h) }));
   const claimed = new Set<string>();
+  const resolved = new Map<string, FieldMapping>();
 
-  const exactPass: Array<FieldMapping | null> = specs.map(() => null);
+  const remaining = new Set(specs.map((spec) => spec.field));
+  const specByField = new Map(specs.map((spec) => [spec.field, spec]));
 
-  // Exact matches first, so a fuzzy near-miss can never steal a header that some other
-  // field names precisely.
-  specs.forEach((spec, index) => {
-    const synonymKeys = spec.synonyms.map(normalizeHeader);
-    const hit = normalizedHeaders.find(
-      (h) => h.key !== '' && !claimed.has(h.raw) && synonymKeys.includes(h.key),
-    );
-    if (hit) {
-      claimed.add(hit.raw);
-      exactPass[index] = {
-        field: spec.field,
-        label: spec.label,
-        sourceHeader: hit.raw,
-        confidence: 'exact',
-        required: spec.required,
-        hint: spec.hint,
-      };
-    }
-  });
+  while (remaining.size > 0) {
+    // Of everything still unresolved, settle the field with the strongest claim first.
+    let chosenField: string | null = null;
+    let chosenCandidates: HeaderCandidate[] = [];
+    let chosenRank = Number.POSITIVE_INFINITY;
 
-  return specs.map((spec, index) => {
-    const already = exactPass[index];
-    if (already) return already;
+    for (const field of remaining) {
+      const spec = specByField.get(field);
+      if (!spec) continue;
 
-    const synonymKeys = spec.synonyms.map(normalizeHeader);
-    let bestHeader: string | null = null;
-    let bestDistance = Number.POSITIVE_INFINITY;
+      const namedByOtherFields = new Set(
+        specs
+          .filter((other) => other.field !== field)
+          .flatMap((other) => other.synonyms.map(normalizeHeader)),
+      );
 
-    for (const header of normalizedHeaders) {
-      if (header.key === '' || claimed.has(header.raw)) continue;
-      for (const synonym of synonymKeys) {
-        const distance = levenshtein(header.key, synonym, PARSING.headerFuzzyMaxDistance);
-        if (distance < bestDistance) {
-          bestDistance = distance;
-          bestHeader = header.raw;
-        }
+      const candidates = candidatesFor(spec, normalizedHeaders, claimed, namedByOtherFields);
+      const best = candidates[0];
+      if (best && best.rank < chosenRank) {
+        chosenRank = best.rank;
+        chosenField = field;
+        chosenCandidates = candidates;
       }
     }
 
-    const confidence: MappingConfidence =
-      bestHeader !== null && bestDistance <= PARSING.headerFuzzyMaxDistance ? 'fuzzy' : 'none';
+    // Nothing left has any candidate: everything still unresolved is unmapped.
+    if (chosenField === null) break;
 
-    if (confidence === 'fuzzy' && bestHeader !== null) claimed.add(bestHeader);
+    const spec = specByField.get(chosenField);
+    const best = chosenCandidates[0];
+    if (!spec || !best) break;
 
-    return {
+    remaining.delete(chosenField);
+    claimed.add(best.raw);
+
+    resolved.set(chosenField, {
       field: spec.field,
       label: spec.label,
-      sourceHeader: confidence === 'none' ? null : bestHeader,
-      confidence,
+      sourceHeader: best.raw,
+      /*
+       * Only a primary spelling earns "Exact". A fallback such as `Voucher No.`, or a
+       * near-miss caught by edit distance, is a guess and is labelled as one -- the old
+       * behaviour called both of those exact, which is precisely how a wrong column got
+       * through unquestioned.
+       */
+      confidence: best.kind === 'primary' ? 'exact' : 'fuzzy',
       required: spec.required,
       hint: spec.hint,
-    };
-  });
+      alternatives: chosenCandidates.slice(1).map((candidate) => candidate.raw),
+    });
+  }
+
+  return specs.map(
+    (spec) =>
+      resolved.get(spec.field) ?? {
+        field: spec.field,
+        label: spec.label,
+        sourceHeader: null,
+        confidence: 'none',
+        required: spec.required,
+        hint: spec.hint,
+        alternatives: [],
+      },
+  );
 }
 
 export interface SheetRow {
