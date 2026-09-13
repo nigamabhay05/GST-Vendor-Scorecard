@@ -43,7 +43,9 @@ function main() {
   console.log(`  total in-scope ITC     ${inr(result.kpis.totalInScopeItc)}`);
   console.log(`  red suppliers          ${String(result.kpis.redSupplierCount)}`);
   console.log(
-    `  deemed accepted        ${String(result.kpis.deemedAcceptedCount)} records (${pct(result.kpis.deemedAcceptedShare)})`,
+    `  deemed accepted        ${String(result.kpis.deemedAcceptedCount)} of ` +
+      `${String(result.deemedAcceptance.recordsConsidered)} records reaching 2B ` +
+      `(${pct(result.kpis.deemedAcceptedShare)})`,
   );
   console.log(
     `  scored / no history    ${String(result.kpis.suppliersScored)} / ${String(result.kpis.suppliersInsufficientHistory)}`,

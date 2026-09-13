@@ -5,9 +5,11 @@ import { buildDataHealthReport, findBookCollisions, findDuplicateInvoices } from
 import { autoMapFields, detectHeaderRow, looksLikeTotalRow, readWorkbook } from './csvExcel';
 import {
   classifySection,
+  documentTypeForSection,
   isAmendmentSection,
   markSupersededRows,
   parseItcAvailability,
+  readPortalDocumentType,
 } from './gstr2b';
 import { parseImsAction } from './imsLog';
 import {
@@ -361,6 +363,31 @@ describe('small field readers', () => {
     expect(classifyDocumentType('Debit Note')).toBe('debit_note');
     expect(classifyDocumentType('Tax Invoice')).toBe('invoice');
     expect(classifyDocumentType('')).toBe('invoice');
+  });
+
+  it('reads the GSTR-2B document type from the column, whatever its case', () => {
+    /*
+     * Regression. A debit note in the register failed to match the same debit note in
+     * GSTR-2B, because the portal type was derived from the sheet name: every row in the
+     * CDNR sheet read as a credit note, credit notes are excluded from invoice matching,
+     * and the debit note was then reported as missing credit worth its full tax.
+     */
+    expect(readPortalDocumentType('Debit note')).toBe('debit_note');
+    expect(readPortalDocumentType('DEBIT NOTE')).toBe('debit_note');
+    expect(readPortalDocumentType('D')).toBe('debit_note');
+    expect(readPortalDocumentType('Credit Note')).toBe('credit_note');
+    expect(readPortalDocumentType('Invoice')).toBe('invoice');
+    // Nothing to go on, so it says so rather than guessing.
+    expect(readPortalDocumentType('')).toBeNull();
+    expect(readPortalDocumentType('  ')).toBeNull();
+  });
+
+  it('lets the note-type column override the sheet it was found in', () => {
+    expect(documentTypeForSection('cdnr', 'Debit note')).toBe('debit_note');
+    expect(documentTypeForSection('cdnra', 'Debit Note')).toBe('debit_note');
+    // The sheet decides only when the column says nothing at all.
+    expect(documentTypeForSection('cdnr', '')).toBe('credit_note');
+    expect(documentTypeForSection('b2b', '')).toBe('invoice');
   });
 
   it('reads ITC eligibility flags, returning null when the cell says nothing', () => {

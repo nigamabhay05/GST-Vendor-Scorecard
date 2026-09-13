@@ -137,10 +137,33 @@ quarters is treated as quarterly. Getting this wrong either excuses three months
 lateness or penalises a supplier for a scheme they are entitled to use, so the inference is
 labelled everywhere it affects a score.
 
-**Deemed acceptance counts `NoAction` *and* absence from a supplied log.** Silence is the
-commonest form of no action; counting only explicit `NoAction` rows would understate the
-finding to the point of hiding it. Periods with no IMS log at all are `unattributed`, not
-deemed accepted.
+**Deemed acceptance counts only an explicit `NoAction` row.** Absence from a supplied log
+used to count as well, on the reasoning that silence is the commonest form of no action.
+It is — but an IMS export commonly lists only the records somebody touched, which made
+every untouched document deemed-accepted and roughly doubled the figure against a log
+containing thirteen `No Action` rows. A number the user cannot tie back to a row in their
+own file is worse than a conservative one, so the conservative reading won. Periods with
+no IMS log at all are `unattributed`.
+
+The share is reported with its denominator — in-scope records that reached GSTR-2B — on
+the tile itself, because a percentage whose base is unstated cannot be checked.
+
+**The Scorecard and Findings screens deliberately use different windows.** The scorecard
+scores the configured window (the most recent periods); Findings reports every period
+loaded. The same supplier therefore carries two different totals across the two screens,
+both correct. Each screen states its own coverage, because two unlabelled figures for the
+same supplier read as a bug rather than as a difference in scope.
+
+**Total in-scope credit is taken from the purchase register, not from the portal.** It is
+the sum of book-side tax over in-scope documents, so a user can filter their own file and
+reproduce it by hand. Summing what the portal returned instead fails that test twice: the
+portal value differs by rounding, and a document not yet due has no portal counterpart at
+all and would contribute nothing to a figure captioned as the total.
+
+**The headline document count is neither input file's row count.** A matched pair is one
+line, credit notes are held back from invoice matching, and a GSTR-2B row with no register
+counterpart adds a line of its own. Every part of that is stated in the interface rather
+than left as a total that ties to nothing the user can see.
 
 ---
 

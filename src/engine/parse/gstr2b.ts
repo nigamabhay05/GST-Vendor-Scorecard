@@ -201,10 +201,20 @@ export const GSTR2B_FIELDS: FieldSpec[] = [
   },
   {
     field: 'docType',
-    label: 'Note type',
-    hint: 'On the credit/debit note sheets, which of the two this row is.',
+    label: 'Document type',
+    hint: 'Invoice, debit note or credit note. Decides what a row can match against.',
     required: false,
-    synonyms: ['note type', 'document type', 'note supply type', 'type', 'doc type'],
+    synonyms: [
+      'note type',
+      'invoice type',
+      'document type',
+      'note supply type',
+      'doc type',
+      'type of document',
+      'nature of document',
+    ],
+    // 'Type' alone is vague enough to be something else entirely on a wide sheet.
+    fallbackSynonyms: ['type'],
   },
   {
     field: 'originalInvoiceNumber',
@@ -246,11 +256,38 @@ export function isAmendmentSection(section: Gstr2bSection): boolean {
   return section === 'b2ba' || section === 'cdnra';
 }
 
-/** Credit and debit notes arrive on the CDNR sheets; the note type is a column there. */
+/**
+ * Reads an explicit document-type cell, or returns null when it says nothing usable.
+ *
+ * Null is the important return. The old code treated "cannot tell" as "credit note",
+ * which meant an unmapped type column turned every note into a credit note -- so credit
+ * notes matched by accident and debit notes could never match at all.
+ */
+export function readPortalDocumentType(raw: string): DocumentType | null {
+  const text = raw.trim().toLowerCase();
+  if (text === '') return null;
+
+  if (/debit/.test(text) || /^d$/.test(text) || /^dr$/.test(text)) return 'debit_note';
+  if (/credit/.test(text) || /^c$/.test(text) || /^cr$/.test(text)) return 'credit_note';
+  if (/invoice|^inv$|^b2b$/.test(text)) return 'invoice';
+
+  return null;
+}
+
+/**
+ * What kind of document a 2B row is.
+ *
+ * An explicit type column wins wherever it appears, including on a single-sheet export
+ * where everything sits under one tab with an "Invoice type" column. Only when no column
+ * says is the sheet used as evidence -- and a CDNR sheet with nothing readable is far
+ * more often credit notes than debit notes, so that stays the fallback, but it is a
+ * fallback now rather than a silent default applied even when the file did say.
+ */
 export function documentTypeForSection(section: Gstr2bSection, noteTypeText: string): DocumentType {
-  if (section === 'cdnr' || section === 'cdnra') {
-    return /debit/i.test(noteTypeText) ? 'debit_note' : 'credit_note';
-  }
+  const explicit = readPortalDocumentType(noteTypeText);
+  if (explicit !== null) return explicit;
+
+  if (section === 'cdnr' || section === 'cdnra') return 'credit_note';
   return 'invoice';
 }
 
@@ -492,7 +529,7 @@ export function parseGstr2b(
         filingDateColumn.hint,
       );
 
-      const noteTypeText = `${textOf(row, fields, 'docType')} ${sheet.name}`;
+      const noteTypeText = textOf(row, fields, 'docType');
       const originalNumber = textOf(row, fields, 'originalInvoiceNumber');
       const isAmendment = isAmendmentSection(section);
 

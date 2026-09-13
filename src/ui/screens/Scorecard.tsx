@@ -3,7 +3,7 @@ import type { AnalysisResult, SupplierFlag, SupplierScorecardEntry } from '../..
 import { AnalysisSummaryLine, KpiBand } from '../components/KpiBand';
 import { FlagChip, InfoNote, Money, Notice } from '../components/primitives';
 import { EXPLANATIONS } from '../explanations';
-import { formatCount, formatMonths, formatPercent } from '../format';
+import { formatCount, formatMonths, formatPercent, formatPeriodRange } from '../format';
 
 /**
  * The main screen.
@@ -125,6 +125,18 @@ export function Scorecard({
     <div>
       <div className="px-6 pt-6">
         <h1 className="text-ink text-[22px] font-semibold tracking-tight">Supplier scorecard</h1>
+        {/*
+          Every figure in this table is confined to the scoring window, while Findings
+          reports every period loaded. The same supplier therefore carries two different
+          totals across the two screens, both correct. Each screen says which window it
+          is on so the difference is an explanation rather than a contradiction.
+        */}
+        <p className="text-ink-muted mt-1 text-[12px]">
+          Covers the {formatCount(result.meta.scoringPeriods.length)} scored periods (
+          {formatPeriodRange(result.meta.scoringPeriods)}). Findings covers all{' '}
+          {formatCount(result.meta.periods.length)} loaded periods, so totals there can be
+          higher.
+        </p>
         {result.meta.isSampleData && (
           <p className="text-ink-muted mt-1 text-[12px]">
             Generated demonstration data — not real client data.

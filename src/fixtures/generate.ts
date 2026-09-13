@@ -395,18 +395,32 @@ function applyBehaviour(
 ) {
   const total = taxable + tax.cgst + tax.sgst + tax.igst;
 
-  const acceptInIms = (actionPeriod: string) =>
+  /*
+   * Logs the buyer's IMS action against a record that reached GSTR-2B.
+   *
+   * Roughly a quarter are logged as No Action rather than Accept. That is not decoration:
+   * under IMS a record nobody touches is deemed accepted when GSTR-3B is filed, and a log
+   * in which every single record was actively accepted describes a team that does not
+   * exist. Without these rows the deemed-acceptance finding has nothing to count and the
+   * sample renders an empty panel, which makes the feature look broken rather than
+   * unexercised.
+   */
+  const acceptInIms = (actionPeriod: string) => {
+    const untouched = randomInt(1, 4) === 1;
     pushIms({
       gstin,
       invoiceNumber,
       invoiceDate,
       value: total,
-      action: 'Accept',
-      actionDate: dayInPeriod(addMonths(actionPeriod, 1) ?? actionPeriod, 13),
+      action: untouched ? 'NoAction' : 'Accept',
+      actionDate: untouched
+        ? ''
+        : dayInPeriod(addMonths(actionPeriod, 1) ?? actionPeriod, 13),
       remark: '',
       recordType: 'Invoice',
       period: actionPeriod,
     });
+  };
 
   const reportOnTime = (itcAvailable = 'Yes') => {
     portalRecords.push({
@@ -622,6 +636,64 @@ function applyBehaviour(
           actionDate: dayInPeriod(addMonths(period, 1) ?? period, 14),
           remark: 'Rejected - credit note not agreed by purchase team',
           recordType: 'Credit Note',
+          period,
+        });
+      }
+
+      /*
+       * A debit note, in a different period, so the sample contains one at all.
+       *
+       * It sits in the same CDNR sheet as credit notes and is distinguished only by the
+       * note-type column -- which is where the engine got it wrong: the sheet name was
+       * allowed to decide, so every CDNR row read as a credit note, and credit notes are
+       * excluded from invoice matching. The debit note then vanished from the match and
+       * its tax was reported as missing credit. The portal writes the type in mixed case
+       * ("Debit note"), so that is what is written here.
+       */
+      if (periodIndex === 5) {
+        // Numbered off the invoice it adjusts, which is both how they are raised and the
+        // only way two notes in the same month do not collide on their number.
+        const noteNumber = `${invoiceNumber}/DN`;
+        const noteTaxable = Math.round(taxable * 0.1);
+        const noteTax = taxFor(spec, noteTaxable);
+
+        bookRecords.push({
+          supplier: spec,
+          gstinInRegister: gstin,
+          invoiceNumber: noteNumber,
+          invoiceDate: dayInPeriod(period, 26),
+          taxable: noteTaxable,
+          ...noteTax,
+          docType: 'Debit Note',
+          natureOfSupply: 'Price escalation',
+          itcEligible: 'Yes',
+          period,
+        });
+
+        portalRecords.push({
+          section: 'cdnr',
+          supplier: spec,
+          gstin,
+          invoiceNumber: noteNumber,
+          invoiceDate: dayInPeriod(period, 26),
+          taxable: noteTaxable,
+          ...noteTax,
+          filingDate: filingDateFor(period, 0, 6),
+          itcAvailable: 'Yes',
+          reverseCharge: 'N',
+          noteType: 'Debit note',
+          period,
+        });
+
+        pushIms({
+          gstin,
+          invoiceNumber: noteNumber,
+          invoiceDate: dayInPeriod(period, 26),
+          value: noteTaxable + noteTax.cgst + noteTax.sgst + noteTax.igst,
+          action: 'Accept',
+          actionDate: dayInPeriod(addMonths(period, 1) ?? period, 14),
+          remark: '',
+          recordType: 'Debit Note',
           period,
         });
       }
@@ -971,7 +1043,8 @@ function writeImsLogs(): string[] {
         record.invoiceNumber,
         formatDate(record.invoiceDate, 'dmy'),
         record.value,
-        record.action,
+        // Written the way the portal writes it, so the parser is exercised on real text.
+        record.action === 'NoAction' ? 'No Action' : record.action,
         formatDate(record.actionDate, 'dmy'),
         record.remark,
         record.recordType,

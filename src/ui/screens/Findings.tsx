@@ -2,7 +2,13 @@ import { attributionLabel } from '../../engine/export/csv';
 import type { AnalysisResult } from '../../engine/types';
 import { DeadlineChip, Money, Notice, SectionHeading } from '../components/primitives';
 import { EXPLANATIONS } from '../explanations';
-import { formatCount, formatDate, formatDays, formatPercent } from '../format';
+import {
+  formatCount,
+  formatDate,
+  formatDays,
+  formatPercent,
+  formatPeriodRange,
+} from '../format';
 
 /**
  * The three things only this tool surfaces.
@@ -22,6 +28,13 @@ export function Findings({ result }: { result: AnalysisResult }) {
       <h1 className="text-ink text-[22px] font-semibold tracking-tight">Findings</h1>
       <p className="text-ink-muted mt-1 max-w-2xl text-[13px]">
         Three things a reconciliation report cannot tell you.
+      </p>
+      {/* The counterpart of the note on the scorecard: this screen uses the wider window. */}
+      <p className="text-ink-muted mt-1 max-w-2xl text-[12px]">
+        Covers all {formatCount(result.meta.periods.length)} loaded periods (
+        {formatPeriodRange(result.meta.periods)}). The scorecard scores only the last{' '}
+        {formatCount(result.meta.scoringPeriods.length)}, so its per-supplier totals can be
+        lower than the ones here.
       </p>
 
       {/* ---------------------------------------------------- attribution */}
@@ -122,13 +135,18 @@ export function Findings({ result }: { result: AnalysisResult }) {
                 <div className="num text-ink text-[32px] leading-none">
                   {formatPercent(result.deemedAcceptance.share)}
                 </div>
-                <div className="text-ink-muted mt-1 text-[11px]">of records deemed accepted</div>
+                <div className="text-ink-muted mt-1 text-[11px]">
+                  of the {formatCount(result.deemedAcceptance.recordsConsidered)} records
+                  that reached GSTR-2B
+                </div>
               </div>
               <div>
                 <div className="num text-ink text-[22px] leading-none">
                   {formatCount(result.deemedAcceptance.count)}
                 </div>
-                <div className="text-ink-muted mt-1 text-[11px]">records</div>
+                <div className="text-ink-muted mt-1 text-[11px]">
+                  records marked No Action in IMS
+                </div>
               </div>
               <div>
                 <div className="num text-ink text-[22px] leading-none">

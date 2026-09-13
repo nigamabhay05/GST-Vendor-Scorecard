@@ -5,6 +5,7 @@ import type {
   CreditNoteReport,
   DeclinedCreditReport,
   DeclinedCreditRow,
+  DocumentCounts,
   HeadlineKpis,
   ImsLogRow,
   MatchResult,
@@ -13,7 +14,7 @@ import type {
   SupplierScorecardEntry,
 } from '../types';
 import { isRecipientCause } from './attribution';
-import { valueOf, type RecoveryInput } from './supplierScore';
+import type { RecoveryInput } from './supplierScore';
 
 /**
  * Exposure: the money figures, and the credit note handling.
@@ -248,15 +249,54 @@ export function buildDeclinedCreditReport(
   };
 }
 
-/** Total in-scope tax across every result. The denominator for concentration. */
+/**
+ * Total in-scope tax on the purchase register, and the denominator for concentration.
+ *
+ * Taken from the register side, not from what the portal returned, because this is the
+ * one headline figure a user can check by hand: filter their own file to the in-scope
+ * documents, sum the tax columns, and get this number back.
+ *
+ * It used to be taxReceived + taxAtRisk + taxNeedsCorrection, which failed that test
+ * twice over. taxReceived carries the *portal* value, so a document the portal reported
+ * a rupee short reduced the total; and a document not yet due has no portal counterpart
+ * and no exposure yet, so it contributed nothing at all -- dropping whole invoices out
+ * of a figure captioned as the total.
+ */
 export function totalInScopeItcOf(results: readonly MatchResult[]): number {
   return roundRupees(
     results
+      // A 2B row with no register counterpart is not credit the user has booked.
       .filter((result) => result.inScope && result.status !== 'missing_in_books')
-      // Same basis as each supplier's own volume, so concentration shares are
-      // computed against a denominator that includes the same documents.
-      .reduce((sum, result) => sum + valueOf(result), 0),
+      .reduce((sum, result) => sum + result.bookTax, 0),
   );
+}
+
+/**
+ * What the headline document count is actually counting.
+ *
+ * One matched pair is one line, so the total is neither the register row count nor the
+ * portal row count -- it is the register plus the 2B rows that had no register
+ * counterpart. Broken out because an unexplained total that matches neither input file
+ * reads like an error in the tool.
+ */
+export function documentCountsOf(
+  results: readonly MatchResult[],
+  rowsRead: { registerRows: number; portalRows: number },
+): DocumentCounts {
+  let portalOnly = 0;
+  for (const result of results) {
+    if (result.status === 'missing_in_books') portalOnly += 1;
+  }
+
+  const fromRegister = results.length - portalOnly;
+  return {
+    registerRows: rowsRead.registerRows,
+    portalRows: rowsRead.portalRows,
+    total: results.length,
+    fromRegister,
+    portalOnly,
+    registerRowsNotMatched: Math.max(0, rowsRead.registerRows - fromRegister),
+  };
 }
 
 export function buildHeadlineKpis(

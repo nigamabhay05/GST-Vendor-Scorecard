@@ -301,6 +301,15 @@ export interface MatchResult {
    */
   portalSupplierGstin: Gstin | null;
 
+  /**
+   * Total tax on the register document, whatever became of it.
+   *
+   * The reconcilable figure: summed over in-scope documents it equals the tax in the
+   * purchase register itself. taxReceived carries the *portal* value and is zero on a
+   * document not yet due, so neither of those ties back to the file the user can open.
+   */
+  bookTax: Rupees;
+
   /** Already net of the 2B value for a tier-2 partial. */
   taxAtRisk: Rupees;
   taxReceived: Rupees;
@@ -703,7 +712,28 @@ export interface DeemedAcceptanceReport {
   share: number;
   /** Null when no IMS log was supplied at all -- in which case nothing can be said. */
   imsLogSupplied: boolean;
+  /** GSTR-2B records considered: the denominator behind the share. */
+  recordsConsidered: number;
   periodsWithImsLog: PeriodKey[];
+}
+
+/** The breakdown behind the headline document count. See documentCountsOf. */
+export interface DocumentCounts {
+  /** Rows read from the purchase registers. What the user sees in their own file. */
+  registerRows: number;
+  /** Rows read from the GSTR-2B workbooks, amendments included. */
+  portalRows: number;
+  /** One line per matched pair, plus every unmatched row on either side. */
+  total: number;
+  /** Lines that came from the purchase register. */
+  fromRegister: number;
+  /** GSTR-2B rows with no register counterpart at all. */
+  portalOnly: number;
+  /**
+   * Register rows held back from matching: credit notes, which reduce credit rather
+   * than carrying it and are reported in their own panel.
+   */
+  registerRowsNotMatched: number;
 }
 
 export interface AnalysisMeta {
@@ -713,6 +743,8 @@ export interface AnalysisMeta {
   /** The scoring window actually used, which may be shorter than the configured one. */
   scoringPeriods: PeriodKey[];
   buyerGstin: Gstin | null;
+  /** What the headline document count is made of. */
+  documentCounts: DocumentCounts;
   isSampleData: boolean;
   engineVersion: string;
   /** Milliseconds spent in the engine, for the "under three seconds" claim. */

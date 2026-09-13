@@ -104,7 +104,16 @@ export function attributeResult(
 
   if (result.onTime === true) {
     if (!covered) return 'unattributed';
-    if (!ims || ims.action === 'NoAction') return 'deemed_accepted';
+    /*
+     * Only an explicit No Action counts.
+     *
+     * Absence from the log used to count too, on the reasoning that silence is the
+     * commonest form of inaction. But an IMS export that lists only acted-on records
+     * then makes every untouched document deemed-accepted, which roughly doubled the
+     * figure against a log that says No Action 13 times. A number the user cannot tie
+     * back to a row in their own file is worse than a conservative one.
+     */
+    if (ims?.action === 'NoAction') return 'deemed_accepted';
     return 'unattributed';
   }
 
@@ -257,10 +266,14 @@ export function buildAttributionSplit(results: readonly MatchResult[]): Attribut
  * figure here is not a supplier problem at all -- it says the buyer's team is not
  * reviewing what arrives, and is accepting whatever suppliers report by default.
  *
- * A record counts as deemed accepted when the IMS log marks it `NoAction`, or when a log
- * exists for the period and the record has no entry in it at all. Silence is the
- * commonest form of no action, and counting only explicit `NoAction` rows would
- * understate the finding to the point of hiding it.
+ * A record counts as deemed accepted only where the IMS log says `NoAction` against it,
+ * in so many words. Treating absence from the log as no action as well doubled the
+ * figure against a log containing thirteen `No Action` rows, because an IMS export
+ * commonly lists only the records somebody touched. Every record counted here can be
+ * pointed at in the user's own file.
+ *
+ * `recordsConsidered` is the denominator and is reported alongside, because a percentage
+ * whose base is unstated is a percentage nobody can check.
  */
 export function buildDeemedAcceptanceReport(
   results: readonly MatchResult[],
@@ -291,6 +304,7 @@ export function buildDeemedAcceptanceReport(
     taxValue,
     share: receivedRecords === 0 ? 0 : count / receivedRecords,
     imsLogSupplied,
+    recordsConsidered: receivedRecords,
     periodsWithImsLog: [...context.periodsWithImsLog].sort(),
   };
 }

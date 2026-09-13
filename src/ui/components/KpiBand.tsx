@@ -1,7 +1,25 @@
 import type { AnalysisResult } from '../../engine/types';
 import { EXPLANATIONS, KPI_NOTES } from '../explanations';
-import { formatCount, formatInrCompact, formatInrExact, formatPercent } from '../format';
+import {
+  formatCount,
+  formatInrCompact,
+  formatInrExact,
+  formatPercent,
+  formatPeriodRange,
+} from '../format';
 import { InfoNote } from './primitives';
+
+interface KpiItem {
+  key: string;
+  label: string;
+  value: string;
+  /** Optional second line under the figure: the denominator, or why there is none. */
+  sub?: string;
+  exact: string;
+  sections?: readonly { label: string; body: string }[];
+  note?: string;
+  tone: 'ink' | 'red';
+}
 
 /**
  * The headline strip.
@@ -12,8 +30,9 @@ import { InfoNote } from './primitives';
 export function KpiBand({ result }: { result: AnalysisResult }) {
   const atRisk = formatInrCompact(result.kpis.totalItcAtRisk);
   const loss = formatInrCompact(result.kpis.expectedCashLoss);
+  const deemed = result.deemedAcceptance;
 
-  const items = [
+  const items: KpiItem[] = [
     {
       key: 'atRisk',
       label: 'ITC at risk',
@@ -44,8 +63,21 @@ export function KpiBand({ result }: { result: AnalysisResult }) {
     {
       key: 'deemed',
       label: 'Records deemed accepted',
-      value: formatPercent(result.kpis.deemedAcceptedShare, 1),
-      exact: `${formatCount(result.kpis.deemedAcceptedCount)} records`,
+      /*
+       * Without an IMS log there is nothing to deem: no log means no No Action rows, and
+       * a percentage of zero would read as a clean result rather than as a missing file.
+       */
+      value: deemed.imsLogSupplied ? formatPercent(result.kpis.deemedAcceptedShare, 1) : '--',
+      // The denominator, on the tile itself. A share whose base is unstated cannot be
+      // checked against the user's own file, which is the only test that matters here.
+      sub: deemed.imsLogSupplied
+        ? `${formatCount(result.kpis.deemedAcceptedCount)} of ` +
+          `${formatCount(deemed.recordsConsidered)} records that reached GSTR-2B`
+        : 'No IMS log supplied',
+      exact: deemed.imsLogSupplied
+        ? `${formatCount(result.kpis.deemedAcceptedCount)} records marked No Action in IMS, ` +
+          `out of ${formatCount(deemed.recordsConsidered)} in-scope records found in GSTR-2B`
+        : 'Upload an IMS action log to measure this',
       sections: undefined,
       note: EXPLANATIONS.deemedAccepted,
       tone: 'ink' as const,
@@ -74,6 +106,9 @@ export function KpiBand({ result }: { result: AnalysisResult }) {
             >
               {item.value}
             </dd>
+            {item.sub ? (
+              <p className="text-ink-muted num mt-2 text-[11px]">{item.sub}</p>
+            ) : null}
             <dt className="text-ink-muted mt-2 flex items-center text-[11px]">
               {item.label}
               {item.sections ? (
@@ -91,15 +126,31 @@ export function KpiBand({ result }: { result: AnalysisResult }) {
 
 /** The one-line context under the band: what was read, and over what window. */
 export function AnalysisSummaryLine({ result }: { result: AnalysisResult }) {
-  const first = result.meta.periods[0];
-  const last = result.meta.periods[result.meta.periods.length - 1];
+  const counts = result.meta.documentCounts;
 
   return (
     <p className="text-ink-muted px-6 py-3 text-[12px]">
-      {formatCount(result.matches.length)} documents across{' '}
-      {formatCount(result.meta.periods.length)} periods
-      {first && last ? `, ${first} to ${last}` : ''}. Scored over the last{' '}
-      {formatCount(result.meta.scoringPeriods.length)}. Total in-scope credit{' '}
+      {/*
+        The line count matches neither input file on its own: a matched pair collapses to
+        one line, credit notes are held back from matching, and a 2B row with no register
+        counterpart adds one. Stated in full, because a total that ties to nothing the
+        user can see in their own files reads as an arithmetic error in the tool.
+      */}
+      {formatCount(counts.registerRows)} register rows and{' '}
+      {formatCount(counts.portalRows)} GSTR-2B rows across{' '}
+      {formatCount(result.meta.periods.length)} periods,{' '}
+      {formatPeriodRange(result.meta.periods)}, giving{' '}
+      {formatCount(counts.total)} document lines:{' '}
+      {formatCount(counts.fromRegister)} from your register
+      {counts.registerRowsNotMatched > 0
+        ? ` (${formatCount(counts.registerRowsNotMatched)} credit ` +
+          `${counts.registerRowsNotMatched === 1 ? 'note' : 'notes'} tracked separately)`
+        : ''}
+      {counts.portalOnly > 0
+        ? `, plus ${formatCount(counts.portalOnly)} found only in GSTR-2B`
+        : ''}
+      . Scored over the last {formatCount(result.meta.scoringPeriods.length)} periods.
+      Total in-scope credit{' '}
       <span className="num text-ink" title={formatInrExact(result.kpis.totalInScopeItc)}>
         {formatInrCompact(result.kpis.totalInScopeItc).display}
       </span>

@@ -12,6 +12,7 @@ import {
   creditNoteIssueValueBySupplier,
   buildHeadlineKpis,
   buildDeclinedCreditReport,
+  documentCountsOf,
   totalInScopeItcOf,
 } from './analyse/exposure';
 import { buildPendingAgeing } from './analyse/pendingAgeing';
@@ -298,6 +299,10 @@ export function runAnalysis(inputs: AnalysisInputs): AnalysisResult {
       periods,
       scoringPeriods,
       buyerGstin: inputs.buyerGstin,
+      documentCounts: documentCountsOf(matches, {
+        registerRows: bookRows.length,
+        portalRows: portalRows.length,
+      }),
       isSampleData: inputs.isSampleData,
       engineVersion: ENGINE_VERSION,
       runtimeMs: Date.now() - startedAt,

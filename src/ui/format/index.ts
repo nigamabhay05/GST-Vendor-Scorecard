@@ -84,6 +84,15 @@ export function formatPeriod(period: string | null): string {
   return `${MONTHS[month - 1] ?? '??'} ${year}`;
 }
 
+/** `["2025-08", …, "2026-03"]` becomes `"Aug 2025 to Mar 2026"`. */
+export function formatPeriodRange(periods: readonly string[]): string {
+  const first = periods[0];
+  const last = periods[periods.length - 1];
+  if (first === undefined || last === undefined) return '—';
+  if (first === last) return formatPeriod(first);
+  return `${formatPeriod(first)} to ${formatPeriod(last)}`;
+}
+
 /** `"2026-04-25"` becomes `"25 Apr 2026"`. Never constructs a Date. */
 export function formatDate(date: string | null): string {
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return '—';

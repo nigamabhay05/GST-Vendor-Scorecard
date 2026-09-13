@@ -3,12 +3,14 @@ import type { ImsLogRow, MatchResult, SupplierMasterRow } from '../types';
 import {
   attributeResult,
   buildAttributionSplit,
+  buildDeemedAcceptanceReport,
   isRecipientCause,
   isSupplierFault,
   suspectsWrongRecipientGstin,
   type AttributionContext,
 } from './attribution';
 import { isGstinFullyValid } from '../validate/gstin';
+import { documentCountsOf, totalInScopeItcOf } from './exposure';
 import { bucketForAge, buildPendingAgeing, deadlineFlagFor } from './pendingAgeing';
 import {
   flagForScore,
@@ -46,6 +48,7 @@ function match(overrides: Partial<MatchResult> & Pick<MatchResult, 'id'>): Match
     taxHeadMismatch: false,
     booksTaxHead: 'intra',
     portalTaxHead: 'intra',
+    bookTax: 18000,
     taxAtRisk: 0,
     taxReceived: 18000,
     taxNeedsCorrection: 0,
@@ -121,12 +124,28 @@ describe('attribution', () => {
     expect(attributeResult(late, contextWith([]))).toBe('supplier_reported_late');
   });
 
-  it('marks an on-time record nobody acted on as deemed accepted', () => {
+  it('marks a record the IMS log calls No Action as deemed accepted', () => {
     const untouched = match({ id: 'm1' });
-    expect(attributeResult(untouched, contextWith([]))).toBe('deemed_accepted');
     expect(
       attributeResult(untouched, contextWith([ims({ id: 'i1', action: 'NoAction' })])),
     ).toBe('deemed_accepted');
+  });
+
+  it('does not deem a record accepted merely because the IMS log omits it', () => {
+    /*
+     * Regression. Absence from the log used to count as no action, which roughly doubled
+     * the figure against a log containing thirteen No Action rows: an IMS export commonly
+     * lists only the records somebody touched, so every untouched document was counted
+     * twice over. Every record in this figure has to be findable in the user's own file.
+     */
+    const absent = match({ id: 'm1' });
+    expect(attributeResult(absent, contextWith([]))).toBe('unattributed');
+    expect(
+      attributeResult(
+        absent,
+        contextWith([ims({ id: 'i1', invoiceNumberNormalized: 'OTHER9' })]),
+      ),
+    ).toBe('unattributed');
   });
 
   it('does not call an actively accepted record deemed accepted', () => {
@@ -933,5 +952,99 @@ describe('pending ageing', () => {
     });
 
     expect(report.rows[0]?.imsRowId).toBe('sooner');
+  });
+});
+
+describe('deemed acceptance report', () => {
+  it('counts only explicit No Action, and states its own denominator', () => {
+    /*
+     * Regression. Both halves matter: the count has to be tied to rows the user can find
+     * in their IMS export, and the share has to carry the base it was divided by. A
+     * percentage with an unstated denominator cannot be checked against the file.
+     */
+    const results = [
+      match({ id: 'm1', invoiceNumberNormalized: 'A', attribution: 'deemed_accepted' }),
+      match({ id: 'm2', invoiceNumberNormalized: 'B', attribution: 'unattributed' }),
+      match({ id: 'm3', invoiceNumberNormalized: 'C', attribution: 'unattributed' }),
+      // No 2B counterpart, so it never reached IMS and is outside the base entirely.
+      match({ id: 'm4', status: 'missing_in_2b', portalRowId: null, taxAtRisk: 9000 }),
+      // Out of scope: no claimable credit, so nothing to deem accepted.
+      match({ id: 'm5', inScope: false, scopeReason: 'blocked_17_5' }),
+    ];
+
+    const report = buildDeemedAcceptanceReport(results, contextWith([]));
+
+    expect(report.count).toBe(1);
+    expect(report.recordsConsidered).toBe(3);
+    expect(report.share).toBeCloseTo(1 / 3, 10);
+    expect(report.taxValue).toBe(18000);
+  });
+
+  it('says nothing at all when no IMS log was supplied', () => {
+    const report = buildDeemedAcceptanceReport([match({ id: 'm1' })], {
+      imsIndex: new Map(),
+      periodsWithImsLog: new Set(),
+    });
+
+    expect(report.imsLogSupplied).toBe(false);
+    expect(report.count).toBe(0);
+  });
+});
+
+describe('total in-scope credit', () => {
+  it('reconciles to the purchase register, not to what the portal returned', () => {
+    /*
+     * Regression. The total used to be taxReceived + taxAtRisk + taxNeedsCorrection,
+     * which failed to tie back to the user's own file twice over: taxReceived carries the
+     * portal value, so a document the portal reported short shrank the total; and a
+     * document not yet due has no portal counterpart and no exposure, so it contributed
+     * nothing at all. This is the one figure a user can check by hand.
+     */
+    const results = [
+      // Portal reported 100 short of the register.
+      match({ id: 'm1', bookTax: 18000, taxReceived: 17900 }),
+      // Not yet due: no portal row, no exposure yet, but the credit is booked.
+      match({
+        id: 'm2',
+        status: 'missing_in_2b',
+        portalRowId: null,
+        notYetDue: true,
+        bookTax: 9000,
+        taxReceived: 0,
+        taxAtRisk: 0,
+      }),
+      // A 2B row with no register counterpart is not credit the user has booked.
+      match({ id: 'm3', status: 'missing_in_books', bookRowId: null, bookTax: 0, taxReceived: 5000 }),
+      // Out of scope, so never claimable.
+      match({ id: 'm4', inScope: false, scopeReason: 'blocked_17_5', bookTax: 4000 }),
+    ];
+
+    expect(totalInScopeItcOf(results)).toBe(27000);
+  });
+});
+
+describe('document counts', () => {
+  it('breaks the headline count into register rows and 2B-only rows', () => {
+    /*
+     * Regression. The headline read 123 against a register of 120 rows and a 2B of 100,
+     * matching neither, because a matched pair is one line. The total is fine; presenting
+     * it unexplained is not.
+     */
+    const counts = documentCountsOf(
+      [
+        match({ id: 'm1' }),
+        match({ id: 'm2', status: 'missing_in_2b', portalRowId: null }),
+        match({ id: 'm3', status: 'missing_in_books', bookRowId: null }),
+      ],
+      // Three register rows, one of them a credit note held back from matching.
+      { registerRows: 3, portalRows: 2 },
+    );
+
+    expect(counts.total).toBe(3);
+    expect(counts.fromRegister).toBe(2);
+    expect(counts.portalOnly).toBe(1);
+    expect(counts.registerRows).toBe(3);
+    expect(counts.portalRows).toBe(2);
+    expect(counts.registerRowsNotMatched).toBe(1);
   });
 });

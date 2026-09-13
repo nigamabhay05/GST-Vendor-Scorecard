@@ -27,6 +27,51 @@ describe('sample dataset, end to end', () => {
     expect(result.dataHealth.ambiguousDateColumns).toHaveLength(0);
   });
 
+  it('matches a debit note in the CDNR sheet instead of writing it off', () => {
+    /*
+     * Regression, end to end. The sample carries one debit note that appears in the
+     * register as "Debit Note" and in the GSTR-2B CDNR sheet as "Debit note". The portal
+     * type used to be taken from the sheet name, so it read as a credit note, was excluded
+     * from invoice matching, and its tax was reported as missing credit.
+     */
+    const debitNotes = result.matches.filter((m) => m.docType === 'debit_note');
+    expect(debitNotes.length).toBeGreaterThan(0);
+    for (const note of debitNotes) {
+      expect(note.status).toBe('matched');
+      expect(note.taxAtRisk).toBe(0);
+      expect(note.taxReceived).toBeGreaterThan(0);
+    }
+  });
+
+  it('explains its own document count in terms of the files it read', () => {
+    // The total ties to neither input file alone, so every part of it is reported.
+    const counts = result.meta.documentCounts;
+    expect(counts.total).toBe(counts.fromRegister + counts.portalOnly);
+    expect(counts.registerRows).toBe(counts.fromRegister + counts.registerRowsNotMatched);
+    expect(counts.registerRows).toBeGreaterThan(0);
+    expect(counts.portalRows).toBeGreaterThan(0);
+  });
+
+  it('reconciles total in-scope credit to the purchase register', () => {
+    // The sum of the book-side tax on every in-scope line, and nothing else.
+    const byHand = result.matches
+      .filter((m) => m.inScope && m.status !== 'missing_in_books')
+      .reduce((sum, m) => sum + m.bookTax, 0);
+
+    expect(result.kpis.totalInScopeItc).toBeCloseTo(byHand, 2);
+  });
+
+  it('counts only IMS No Action rows as deemed accepted, and reports the base', () => {
+    const report = result.deemedAcceptance;
+    expect(report.imsLogSupplied).toBe(true);
+    expect(report.recordsConsidered).toBeGreaterThan(report.count);
+    expect(report.share).toBeCloseTo(report.count / report.recordsConsidered, 10);
+
+    // Every counted record is a document the IMS log actually marks No Action.
+    const deemed = result.matches.filter((m) => m.attribution === 'deemed_accepted');
+    expect(deemed).toHaveLength(report.count);
+  });
+
   it('produces the expected headline figures', () => {
     expect({
       totalItcAtRisk: result.kpis.totalItcAtRisk,
@@ -38,13 +83,13 @@ describe('sample dataset, end to end', () => {
       suppliersInsufficientHistory: result.kpis.suppliersInsufficientHistory,
     }).toMatchInlineSnapshot(`
       {
-        "deemedAcceptedCount": 31,
-        "expectedCashLoss": 820000.76,
+        "deemedAcceptedCount": 58,
+        "expectedCashLoss": 859552.81,
         "redSupplierCount": 2,
         "suppliersInsufficientHistory": 2,
         "suppliersScored": 22,
-        "totalInScopeItc": 11272680,
-        "totalItcAtRisk": 1173240,
+        "totalInScopeItc": 11322180,
+        "totalItcAtRisk": 1333260,
       }
     `);
   });
